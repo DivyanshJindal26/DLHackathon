@@ -12,7 +12,6 @@ from PIL import Image, ImageDraw
 
 IMG_W, IMG_H = 1242, 375
 
-# Distance color stops — matches frontend colorScale.js exactly
 _STOPS = [
     (0,  (239, 68,  68)),
     (5,  (249, 115, 22)),
@@ -28,6 +27,12 @@ CLASS_COLORS_PIL = {
     "Van":        (167, 139, 250),
     "Truck":      (244, 114, 182),
 }
+
+# Corner index pairs for all 12 edges of a cuboid
+# Corners: 0-3 = front face, 4-7 = back face
+_FRONT_EDGES = [(0, 1), (1, 2), (2, 3), (3, 0)]
+_BACK_EDGES  = [(4, 5), (5, 6), (6, 7), (7, 4)]
+_SIDE_EDGES  = [(0, 4), (1, 5), (2, 6), (3, 7)]
 
 
 def _distance_to_rgb(dist_m: float) -> tuple:
@@ -52,54 +57,132 @@ def _fig_to_base64(fig) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+# ── 3-D box projection helpers ─────────────────────────────────────────────
+
+def box3d_corners_cam(box_3d: list) -> np.ndarray:
+    """
+    Compute 8 corners of the 3-D box in camera frame (x=right, y=down, z=fwd).
+    box_3d: [cx, cy, cz, w, h, l, yaw]  — yaw rotates around Y axis.
+
+    Corner ordering:
+        0: right-bottom-front  1: left-bottom-front
+        2: left-top-front      3: right-top-front
+        4: right-bottom-back   5: left-bottom-back
+        6: left-top-back       7: right-top-back
+    """
+    cx, cy, cz, w, h, l, yaw = box_3d
+    hw, hh, hl = w / 2.0, h / 2.0, l / 2.0
+
+    local = np.array([
+        [ hw,  hh,  hl],
+        [-hw,  hh,  hl],
+        [-hw, -hh,  hl],
+        [ hw, -hh,  hl],
+        [ hw,  hh, -hl],
+        [-hw,  hh, -hl],
+        [-hw, -hh, -hl],
+        [ hw, -hh, -hl],
+    ], dtype=np.float64)
+
+    cy_, sy_ = np.cos(yaw), np.sin(yaw)
+    R = np.array([
+        [ cy_, 0, sy_],
+        [   0, 1,   0],
+        [-sy_, 0, cy_],
+    ], dtype=np.float64)
+
+    return local @ R.T + np.array([cx, cy, cz], dtype=np.float64)
+
+
+def project_box3d(box_3d: list, P2: np.ndarray) -> np.ndarray | None:
+    """
+    Project 3-D box to image plane.
+    Returns (8, 2) float array of (u, v) pixel coords, or None if any corner
+    is behind the camera (depth ≤ 0).
+    """
+    corners = box3d_corners_cam(box_3d)          # (8, 3)
+    hom = np.hstack([corners, np.ones((8, 1))])  # (8, 4)
+    proj = (P2 @ hom.T)                          # (3, 8)
+    depth = proj[2]
+    if (depth <= 0.1).any():
+        return None
+    pts = np.stack([proj[0] / depth, proj[1] / depth], axis=1)
+    return pts  # (8, 2)
+
+
+def _draw_box3d_pil(draw: ImageDraw.Draw, pts2d: np.ndarray, color: tuple,
+                    front_w: int = 2, back_w: int = 1) -> None:
+    """Draw 12-edge wireframe on a PIL ImageDraw context."""
+    def pt(i):
+        return (int(round(pts2d[i, 0])), int(round(pts2d[i, 1])))
+
+    for i, j in _FRONT_EDGES:
+        draw.line([pt(i), pt(j)], fill=color, width=front_w)
+    for i, j in _BACK_EDGES:
+        draw.line([pt(i), pt(j)], fill=color, width=back_w)
+    for i, j in _SIDE_EDGES:
+        draw.line([pt(i), pt(j)], fill=color, width=back_w)
+
+
 def annotate_image(image: np.ndarray, detections: list[dict], calib: dict,
                    ground_truth: list[dict] | None = None) -> str:
     """
-    Draw distance-colored prediction bboxes on the camera image.
-    If ground_truth provided, also draws GT boxes as dashed white outlines.
+    Draw 3-D bounding box wireframes on the camera image.
+    Falls back to a 2-D rectangle if 3-D projection fails (corner behind camera).
+    GT boxes are drawn as dashed white 2-D outlines.
     Returns base64 PNG.
     """
-    img = Image.fromarray(image.astype(np.uint8), "RGB")
+    P2 = calib.get("P2")
+    img  = Image.fromarray(image.astype(np.uint8), "RGB")
     draw = ImageDraw.Draw(img)
 
-    # Draw GT boxes first (underneath predictions)
+    # GT boxes (dashed 2-D rectangles)
     if ground_truth:
         for gt in ground_truth:
             x1, y1, x2, y2 = gt["bbox_2d"]
-            # Dashed white rectangle — PIL doesn't support dash natively, draw segments
             dash, gap = 8, 4
             for x in range(x1, x2, dash + gap):
-                draw.line([(x, y1), (min(x + dash, x2), y1)], fill=(255,255,255), width=2)
-                draw.line([(x, y2), (min(x + dash, x2), y2)], fill=(255,255,255), width=2)
+                draw.line([(x, y1), (min(x + dash, x2), y1)], fill=(255, 255, 255), width=2)
+                draw.line([(x, y2), (min(x + dash, x2), y2)], fill=(255, 255, 255), width=2)
             for y in range(y1, y2, dash + gap):
-                draw.line([(x1, y), (x1, min(y + dash, y2))], fill=(255,255,255), width=2)
-                draw.line([(x2, y), (x2, min(y + dash, y2))], fill=(255,255,255), width=2)
-            # GT label (bottom of box)
+                draw.line([(x1, y), (x1, min(y + dash, y2))], fill=(255, 255, 255), width=2)
+                draw.line([(x2, y), (x2, min(y + dash, y2))], fill=(255, 255, 255), width=2)
             gt_label = f"GT:{gt['class']} {gt.get('distance_m', 0):.1f}m"
             tw = draw.textlength(gt_label)
-            draw.rectangle([x1, y2 + 1, x1 + tw + 6, y2 + 16], fill=(60, 60, 60, 200))
+            draw.rectangle([x1, y2 + 1, x1 + tw + 6, y2 + 16], fill=(60, 60, 60))
             draw.text((x1 + 3, y2 + 2), gt_label, fill=(220, 220, 220))
 
-    # Draw prediction boxes
+    # Prediction 3-D wireframes
     for det in detections:
-        x1, y1, x2, y2 = det["bbox_2d"]
         dist  = det.get("distance_m", 0.0)
         color = _distance_to_rgb(dist)
+        box3d = det.get("box_3d")
+        drawn_3d = False
 
-        alpha_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        fill_draw   = ImageDraw.Draw(alpha_layer)
-        fill_draw.rectangle([x1, y1, x2, y2], fill=(*color, 35))
-        img   = img.convert("RGBA")
-        img   = Image.alpha_composite(img, alpha_layer)
-        img   = img.convert("RGB")
-        draw  = ImageDraw.Draw(img)
+        if box3d and len(box3d) == 7 and P2 is not None:
+            pts2d = project_box3d(box3d, P2)
+            if pts2d is not None:
+                _draw_box3d_pil(draw, pts2d, color, front_w=2, back_w=1)
+                drawn_3d = True
 
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+        if not drawn_3d:
+            # Fallback: 2-D rectangle from bbox_2d
+            x1, y1, x2, y2 = det["bbox_2d"]
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+
+        # Label — anchor to top of the front-face or bbox
+        if drawn_3d and pts2d is not None:
+            label_x = int(min(pts2d[:4, 0]))
+            label_y = int(min(pts2d[:4, 1])) - 16
+        else:
+            x1, y1, _, _ = det["bbox_2d"]
+            label_x, label_y = x1, max(y1 - 16, 0)
+
         label = f"{det['class']} {dist:.1f}m"
-        lx, ly = x1, max(y1 - 16, 0)
-        tw = draw.textlength(label)
-        draw.rectangle([lx, ly, lx + tw + 6, ly + 15], fill=(*color, 220))
-        draw.text((lx + 3, ly + 2), label, fill=(10, 10, 10))
+        tw    = draw.textlength(label)
+        label_y = max(label_y, 0)
+        draw.rectangle([label_x, label_y, label_x + tw + 6, label_y + 15], fill=(*color, 220))
+        draw.text((label_x + 3, label_y + 2), label, fill=(10, 10, 10))
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -107,7 +190,7 @@ def annotate_image(image: np.ndarray, detections: list[dict], calib: dict,
 
 
 def generate_bev(points: np.ndarray, detections: list[dict]) -> str:
-    """Bird's-eye-view scatter plot of point cloud + detection boxes. Returns raw base64 PNG."""
+    """Bird's-eye-view scatter + oriented box footprints. Returns base64 PNG."""
     rng = np.random.default_rng(0)
 
     fig, ax = plt.subplots(figsize=(6, 6), facecolor="#020617")
@@ -116,17 +199,12 @@ def generate_bev(points: np.ndarray, detections: list[dict]) -> str:
     ax.set_ylim(-5, 50)
     ax.set_aspect("equal")
 
-    # Ground point cloud (subsample for speed)
-    # KITTI LiDAR frame: X=forward, Y=left, Z=up
-    # BEV convention (matches camera-frame xyz in detections): x=right, y=forward
-    # So: bev_x = -LiDAR_Y (negate because LiDAR Y is left), bev_y = LiDAR_X
     n_show = min(len(points), 10_000)
-    idx = rng.choice(len(points), n_show, replace=False)
-    sub = points[idx]
+    idx    = rng.choice(len(points), n_show, replace=False)
+    sub    = points[idx]
     ax.scatter(-sub[:, 1], sub[:, 0], c=sub[:, 3], cmap="Blues",
                s=0.3, alpha=0.4, vmin=0, vmax=1)
 
-    # Distance rings
     ring_data = [(10, "#ef4444"), (20, "#f97316"), (30, "#84cc16"), (40, "#22c55e")]
     theta = np.linspace(0, 2 * np.pi, 360)
     for r, c in ring_data:
@@ -134,11 +212,9 @@ def generate_bev(points: np.ndarray, detections: list[dict]) -> str:
         ax.text(0.5, r + 0.5, f"{r}m", color=c, fontsize=6, alpha=0.7,
                 ha="center", fontfamily="monospace")
 
-    # Ego vehicle
     ax.scatter([0], [0], marker="s", s=60, color="#3b82f6",
                edgecolors="#60a5fa", linewidths=1.5, zorder=5)
 
-    # Detections
     for det in detections:
         xyz = det.get("xyz", [0, 0, 0])
         cx, cy, cz = xyz[0], xyz[1], xyz[2]
@@ -149,10 +225,13 @@ def generate_bev(points: np.ndarray, detections: list[dict]) -> str:
             bx, _, bz, bw, _, bl, yaw = box
             cos_y, sin_y = np.cos(yaw), np.sin(yaw)
             hw, hl = bw / 2, bl / 2
-            corners = np.array([[-hw, -hl], [hw, -hl], [hw, hl], [-hw, hl], [-hw, -hl]])
-            rx = corners[:, 0] * cos_y - corners[:, 1] * sin_y + bx
-            rz = corners[:, 0] * sin_y + corners[:, 1] * cos_y + bz
+            # Footprint corners in camera XZ plane (= BEV XY)
+            local = np.array([[-hw, -hl], [hw, -hl], [hw, hl], [-hw, hl], [-hw, -hl]])
+            rx = local[:, 0] * cos_y + local[:, 1] * sin_y + bx
+            rz = -local[:, 0] * sin_y + local[:, 1] * cos_y + bz
             ax.plot(rx, rz, color=col, lw=1.2, alpha=0.85)
+            # Front face highlight
+            ax.plot(rx[:2], rz[:2], color=col, lw=2.0, alpha=1.0)
 
         ax.scatter([cx], [cz], color=col, s=18, zorder=4,
                    edgecolors="black", linewidths=0.4)

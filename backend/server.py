@@ -14,7 +14,7 @@ from modules.calibration import parse_calib
 from modules.detector import detect
 from modules.fusion import fuse
 from modules.fusion_b import fuse_b
-from modules.visualizer import annotate_image, generate_bev
+from modules.visualizer import annotate_image, generate_bev, project_box3d
 from modules.synthetic import generate_synthetic_scene, get_synthetic_detections
 from modules.label_parser import parse_label_file
 from modules.metrics import match_and_evaluate
@@ -62,6 +62,12 @@ async def infer(
     # Always run the model — use Approach B (RANSAC + DBSCAN + PCA)
     detections_2d = detect(scene["image"])
     detections    = fuse_b(detections_2d, scene["points"], calib_parsed, scene["image"].shape[:2])
+
+    # Annotate each detection with projected 2D corners for frontend 3D rendering
+    P2 = calib_parsed.get("P2")
+    for det in detections:
+        pts = project_box3d(det["box_3d"], P2) if (det.get("box_3d") and P2 is not None) else None
+        det["corners_2d"] = pts.tolist() if pts is not None else None
 
     # If GT labels provided, compute metrics against predictions
     ground_truth = None
@@ -132,6 +138,10 @@ async def infer_scene(scene_id: str):
     calib_parsed = parse_calib(scene["calib"])
     detections_2d = detect(scene["image"])
     detections = fuse_b(detections_2d, scene["points"], calib_parsed, scene["image"].shape[:2])
+    P2 = calib_parsed.get("P2")
+    for det in detections:
+        pts = project_box3d(det["box_3d"], P2) if (det.get("box_3d") and P2 is not None) else None
+        det["corners_2d"] = pts.tolist() if pts is not None else None
     annotated = annotate_image(scene["image"], detections, calib_parsed)
     bev = generate_bev(scene["points"], detections)
 

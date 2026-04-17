@@ -4,35 +4,76 @@ import { useCanvasPoints } from '../../hooks/useCanvasPoints'
 import { segmentDistance } from '../../utils/distanceCalc'
 import useAppStore from '../../store/appStore'
 
-function drawBbox(ctx, det, index, isHovered, isClicked) {
+// Edge pairs for 12-edge cuboid wireframe (corners 0-3=front, 4-7=back)
+const FRONT_EDGES = [[0,1],[1,2],[2,3],[3,0]]
+const BACK_EDGES  = [[4,5],[5,6],[6,7],[7,4]]
+const SIDE_EDGES  = [[0,4],[1,5],[2,6],[3,7]]
+
+function drawBox3d(ctx, det, isHovered, isClicked) {
+  const color   = isHovered ? '#ffffff' : distanceToHex(det.distance_m ?? 50)
+  const alpha   = isHovered || isClicked ? 1 : 0.85
+  const pts     = det.corners_2d  // (8,2) or null
   const [x1, y1, x2, y2] = det.bbox_2d ?? []
-  if (x1 == null) return
-  const color = distanceToHex(det.distance_m ?? 50)
-  const lineW = isHovered || isClicked ? 3 : 1.5
-  const alpha = isHovered || isClicked ? 1 : 0.85
 
   ctx.save()
   ctx.globalAlpha = alpha
-  ctx.strokeStyle = isHovered ? '#ffffff' : color
-  ctx.lineWidth = lineW
-  ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
-  if (isHovered || isClicked) {
-    ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.08)' : 'rgba(59,130,246,0.08)'
-    ctx.fillRect(x1, y1, x2 - x1, y2 - y1)
+  if (pts && pts.length === 8) {
+    // 3-D wireframe
+    const front_w = isHovered || isClicked ? 2.5 : 2
+    const back_w  = isHovered || isClicked ? 1.5 : 1
+
+    const p = (i) => [pts[i][0], pts[i][1]]
+    const line = (i, j, w) => {
+      ctx.beginPath()
+      ctx.lineWidth = w
+      ctx.moveTo(...p(i))
+      ctx.lineTo(...p(j))
+      ctx.stroke()
+    }
+
+    ctx.strokeStyle = color
+    FRONT_EDGES.forEach(([i, j]) => line(i, j, front_w))
+    BACK_EDGES.forEach(([i, j])  => line(i, j, back_w))
+    SIDE_EDGES.forEach(([i, j])  => line(i, j, back_w))
+
+    if (isHovered || isClicked) {
+      // Highlight front face fill
+      ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.06)' : 'rgba(59,130,246,0.06)'
+      ctx.beginPath()
+      FRONT_EDGES.forEach(([i], k) => k === 0 ? ctx.moveTo(...p(i)) : ctx.lineTo(...p(i)))
+      ctx.closePath()
+      ctx.fill()
+    }
+  } else if (x1 != null) {
+    // Fallback: 2-D rectangle
+    ctx.strokeStyle = color
+    ctx.lineWidth = isHovered || isClicked ? 3 : 1.5
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+    if (isHovered || isClicked) {
+      ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.08)' : 'rgba(59,130,246,0.08)'
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1)
+    }
   }
 
-  // Label background
+  // Label — anchor to top-left of front face or bbox
   const label = `${det.class} ${det.distance_m != null ? det.distance_m.toFixed(1) + 'm' : ''}`
   ctx.font = 'bold 11px monospace'
   const tw = ctx.measureText(label).width
   const lh = 14
-  const lx = x1
-  const ly = Math.max(y1 - lh - 2, 0)
+  let lx, ly
+  if (pts && pts.length === 8) {
+    lx = Math.min(...pts.slice(0, 4).map(p => p[0]))
+    ly = Math.max(Math.min(...pts.slice(0, 4).map(p => p[1])) - lh - 2, 0)
+  } else {
+    lx = x1 ?? 0
+    ly = Math.max((y1 ?? lh) - lh - 2, 0)
+  }
   ctx.fillStyle = isHovered ? 'rgba(255,255,255,0.9)' : `${color}dd`
   ctx.fillRect(lx - 1, ly, tw + 8, lh + 2)
   ctx.fillStyle = isHovered ? '#000' : '#fff'
   ctx.fillText(label, lx + 3, ly + lh - 1)
+
   ctx.restore()
 }
 
@@ -118,7 +159,7 @@ export default function AnnotatedCanvas({ base64Image, detections, hoveredId, cl
     const ctx = canvas.getContext('2d')
     ctx.drawImage(img, 0, 0)
     detections?.forEach((det, i) =>
-      drawBbox(ctx, det, i, i === hoveredId, i === clickedId)
+      drawBox3d(ctx, det, i === hoveredId, i === clickedId)
     )
     if (canvasMode === 'measure') {
       drawMeasureOverlay(ctx, canvasPoints, detections, canvas.width)
