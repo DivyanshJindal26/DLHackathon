@@ -87,8 +87,11 @@ def bbox_to_frustum_corners(bbox_2d: list, distance_m: float, length: float,
     # Far face: back surface
     z_far  = distance_m + length / 2.0
 
-    # Perspective scale: far corners converge toward the principal point
-    scale = z_near / z_far
+    # Perspective scale: far corners converge toward the principal point.
+    # Clamp to [0.72, 1): for close/large objects (e.g. truck at 7m, L=11m)
+    # the raw scale (0.31) would push the far face far off to one side,
+    # creating an extreme visual collapse. 0.72 gives a clean depth look.
+    scale = max(z_near / z_far, 0.72)
 
     def far_pt(u, v):
         return [cx_pix + (u - cx_pix) * scale,
