@@ -480,6 +480,10 @@ def run_fused_pipeline(
     # ── Serialise detections for JSON response ────────────────────────────────
     serial_dets = []
     for det in final_dets:
+        bbox = det.get("bbox_2d", [0, 0, 0, 0])
+        # Ensure JSON-safe ints if bbox comes from numpy min/max ops.
+        bbox_py = [int(float(v)) for v in bbox]
+
         serial_dets.append({
             "label":           det["label"],
             "score":           round(float(det["score"]), 3),
@@ -488,7 +492,7 @@ def run_fused_pipeline(
             "corners":         [[round(float(v), 3) for v in row]
                                 for row in det["corners"].tolist()],
             "heading":         round(float(det.get("heading", det.get("angle", 0.0))), 4),
-            "bbox_2d":         list(det.get("bbox_2d", [0, 0, 0, 0])),
+            "bbox_2d":         bbox_py,
             "source":          det.get("source", ""),
             "confidence_tier": det.get("confidence_tier", ""),
             "color_hex":       CLASS_HEX.get(det["label"].lower(), "#94a3b8"),
