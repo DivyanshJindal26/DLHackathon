@@ -34,7 +34,7 @@ function buildBoxTraces(detections) {
       mode: 'lines',
       x: xs, y: ys, z: zs,
       line: { color, width: 5 },
-      name: `${detClass} ${(det.distance_m || 0).toFixed(1)}m`,
+      name: `${detClass.toUpperCase()} [${(det.distance_m || 0).toFixed(1)}m]`,
       showlegend: true,
       hoverinfo: 'name',
     })
@@ -42,17 +42,26 @@ function buildBoxTraces(detections) {
   return traces
 }
 
-function buildLidarTrace(scenePoints) {
+function buildLidarTrace(scenePoints, scenePointColors) {
   if (!Array.isArray(scenePoints) || scenePoints.length === 0) return null
 
   const xs = []
   const ys = []
   const zs = []
+  const colorStrings = []
   for (const p of scenePoints) {
     if (!Array.isArray(p) || p.length < 3) continue
+    const idx = xs.length
     xs.push(p[0])
     ys.push(p[1])
     zs.push(p[2])
+
+    const c = Array.isArray(scenePointColors?.[idx]) ? scenePointColors[idx] : null
+    if (c && c.length >= 3) {
+      colorStrings.push(`rgb(${c[0]},${c[1]},${c[2]})`)
+    } else {
+      colorStrings.push('rgb(180,180,180)')
+    }
   }
 
   if (xs.length === 0) return null
@@ -64,14 +73,13 @@ function buildLidarTrace(scenePoints) {
     y: ys,
     z: zs,
     marker: {
-      size: 1,
-      color: zs,
-      colorscale: 'Viridis',
-      opacity: 0.6,
+      size: 1.5,
+      color: colorStrings,
+      opacity: 0.9,
     },
-    name: 'LiDAR',
+    name: 'LiDAR (camera RGB)',
     showlegend: true,
-    hoverinfo: 'skip',
+    hovertemplate: 'X(fwd): %{x:.1f} m<br>Y(left): %{y:.1f} m<br>Z(up): %{z:.1f} m<extra></extra>',
   }
 }
 
@@ -86,7 +94,7 @@ export default function Scene3DTab() {
     import('plotly.js-dist-min').then((Plotly) => {
       const traces = buildBoxTraces(result.detections)
 
-      const lidarTrace = buildLidarTrace(result.scene_points)
+      const lidarTrace = buildLidarTrace(result.scene_points, result.scene_point_colors)
       if (lidarTrace) {
         traces.unshift(lidarTrace)
       }
@@ -103,12 +111,17 @@ export default function Scene3DTab() {
         hoverinfo: 'name',
       })
 
+      const frameId = result.frame_id ?? 'N/A'
+
       const layout = {
-        title: 'PointPillars — 3D Detections',
+        title: {
+          text: `<b>Fused PvP/YOLO 3D Detections — Frame ${frameId}</b><br><sup>LiDAR colored by RGB Photo | Bounding boxes overlaid</sup>`,
+          x: 0.5,
+        },
         paper_bgcolor: '#111',
         plot_bgcolor:  '#111',
         font: { color: 'white', size: 10 },
-        margin: { l: 0, r: 0, t: 36, b: 0 },
+        margin: { l: 0, r: 0, t: 80, b: 0 },
         legend: {
           bgcolor: '#222',
           bordercolor: '#555',
@@ -116,16 +129,17 @@ export default function Scene3DTab() {
           font: { size: 10, color: 'white' },
         },
         scene: {
-          bgcolor: '#111',
-          xaxis: { title: 'X fwd(m)', color: 'white' },
-          yaxis: { title: 'Y left(m)', color: 'white' },
-          zaxis: { title: 'Z up(m)', color: 'white' },
+          bgcolor: '#111111',
+          xaxis: { title: 'X — Forward (m)', backgroundcolor: '#1a1a1a', gridcolor: '#333', color: 'white' },
+          yaxis: { title: 'Y — Left/Right (m)', backgroundcolor: '#1a1a1a', gridcolor: '#333', color: 'white' },
+          zaxis: { title: 'Z — Elevation (m)', backgroundcolor: '#1a1a1a', gridcolor: '#333', color: 'white' },
           aspectmode: 'data',
           camera: {
             eye: { x: -0.3, y: -1.8, z: 0.9 },
             up:  { x: 0, y: 0, z: 1 },
           },
         },
+        height: 700,
       }
 
       const config = {

@@ -382,6 +382,7 @@ def run_fused_pipeline(
         img_boxes   (H,W,3) uint8 BGR — camera image + 3D wireframes + labels
         final_dets  list of detection dicts (serialisable — corners as lists)
         scene_points list of sampled LiDAR points [[x,y,z], ...] for 3D scene viz
+        scene_point_colors list of sampled RGB colors [[r,g,b], ...] aligned with scene_points
         stats       dict {yolo_n, pp_raw_n, pp_gated_n, obb_n, final_n}
     """
     # ── Preprocess LiDAR ─────────────────────────────────────────────────────
@@ -500,10 +501,37 @@ def run_fused_pipeline(
             "distance_m":      round(float(np.linalg.norm(det["center"])), 2),
         })
 
-    # Notebook-like 3D point cloud uses all_points[::5].
+    # Notebook-like RGB coloring via LiDAR->image projection.
+    h, w = image_bgr.shape[:2]
+    N = pts_xyz.shape[0]
+    pts_h = np.vstack([pts_xyz.T, np.ones((1, N))])
+    proj = calib["T_velo_to_img"] @ pts_h
+    depths = proj[2]
+
+    u = (proj[0] / (depths + 1e-9)).astype(int)
+    v = (proj[1] / (depths + 1e-9)).astype(int)
+    valid_mask = (depths > 0.1) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
+
+    pts_valid = pts_xyz[valid_mask]
+    u_valid = u[valid_mask]
+    v_valid = v[valid_mask]
+
+    # Sample every 2 points (same strategy as notebook cell for browser performance).
+    step = 2
+    pts_s = pts_valid[::step]
+    u_s = u_valid[::step]
+    v_s = v_valid[::step]
+
+    # image_bgr comes from OpenCV; convert to RGB order for frontend.
+    rgb_s = image_bgr[v_s, u_s][:, ::-1]
+
     scene_points = [
         [round(float(p[0]), 3), round(float(p[1]), 3), round(float(p[2]), 3)]
-        for p in pts_xyz[::5]
+        for p in pts_s
+    ]
+    scene_point_colors = [
+        [int(c[0]), int(c[1]), int(c[2])]
+        for c in rgb_s
     ]
 
-    return img_lidar, img_boxes, serial_dets, scene_points, stats
+    return img_lidar, img_boxes, serial_dets, scene_points, scene_point_colors, stats
