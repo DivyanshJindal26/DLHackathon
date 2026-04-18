@@ -186,8 +186,14 @@ def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = Tr
         names = [n for n in zf.namelist() if not n.endswith("/")]
         cats = _categorise(names)
 
-        # Sorted stems — process in dataset order
-        common_stems = sorted(set(cats["bin"]) & set(cats["png"]))
+        # Sorted stems — process only frames that have all required per-frame files.
+        # If per-frame calib exists in the ZIP, require it as well.
+        if cats["calib_frame"]:
+            common_stems = sorted(set(cats["bin"]) & set(cats["png"]) & set(cats["calib_frame"]))
+        else:
+            # Raw KITTI style uses date-level calib files, so stem-wise pair is bin+png.
+            common_stems = sorted(set(cats["bin"]) & set(cats["png"]))
+
         total_found = len(common_stems)
         stems_to_run = common_stems[:max_frames]
 
@@ -197,7 +203,7 @@ def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = Tr
             try:
                 calib_dict = _build_calib_dict(zf, cats, stem)
                 if calib_dict is None or "P2" not in calib_dict:
-                    errors.append(f"{stem}: calib missing or incomplete")
+                    # Missing/incomplete calib for this frame: silently skip.
                     continue
 
                 bin_bytes = zf.read(cats["bin"][stem])
