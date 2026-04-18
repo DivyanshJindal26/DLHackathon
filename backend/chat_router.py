@@ -26,6 +26,91 @@ _client = AsyncOpenAI(
 MODEL = "anthropic/claude-sonnet-4-6"
 
 
+def _content_to_text(content: Any) -> str:
+    """Convert mixed content payloads into plain text for provider compatibility."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        return json.dumps(content)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                # Accept common text block shapes; ignore tool blocks.
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+        return "\n".join(p for p in parts if p)
+    return str(content)
+
+
+def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize incoming chat history into OpenAI-compatible message objects."""
+    normalized: list[dict[str, Any]] = []
+
+    for m in messages:
+        role = m.get("role")
+        if role not in {"system", "user", "assistant", "tool"}:
+            continue
+
+        if role == "tool":
+            tool_call_id = m.get("tool_call_id")
+            if not tool_call_id:
+                continue
+            normalized.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": _content_to_text(m.get("content")),
+                }
+            )
+            continue
+
+        item: dict[str, Any] = {
+            "role": role,
+            "content": _content_to_text(m.get("content")),
+        }
+
+        if role == "assistant" and isinstance(m.get("tool_calls"), list):
+            tc_norm = []
+            for tc in m["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = tc.get("id")
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+                fn_name = fn.get("name") if fn else tc.get("name")
+                fn_args = fn.get("arguments") if fn else tc.get("input")
+                if fn_name is None:
+                    continue
+                if isinstance(fn_args, dict):
+                    fn_args = json.dumps(fn_args)
+                elif fn_args is None:
+                    fn_args = "{}"
+                tc_norm.append(
+                    {
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": fn_name,
+                            "arguments": fn_args,
+                        },
+                    }
+                )
+            if tc_norm:
+                item["tool_calls"] = tc_norm
+
+        normalized.append(item)
+
+    return normalized
+
+
 class ChatRequest(BaseModel):
     messages: list[dict[str, Any]]
     scene_context: dict[str, Any] | None = None
@@ -45,7 +130,7 @@ async def chat(req: ChatRequest):
     system = req.scene_context.get("system", "") if req.scene_context else ""
     tools = req.scene_context.get("tools") if req.scene_context else None
 
-    messages = req.messages
+    messages = _normalize_messages(req.messages)
     if system:
         messages = [{"role": "system", "content": system}] + messages
 
@@ -68,7 +153,7 @@ async def chat(req: ChatRequest):
 
         if not msg.tool_calls:
             # Final text response
-            return ChatResponse(content=msg.content or "", done=True)
+            return ChatResponse(content=_content_to_text(msg.content), done=True)
 
         # Return the tool call info to the frontend to execute
         tool_calls_out = [
@@ -80,7 +165,7 @@ async def chat(req: ChatRequest):
             for tc in msg.tool_calls
         ]
         return ChatResponse(
-            content=msg.content or "",
+            content=_content_to_text(msg.content),
             tool_calls=tool_calls_out,
             done=False,
         )
