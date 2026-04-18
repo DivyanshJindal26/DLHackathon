@@ -62,11 +62,17 @@ const useAppStore = create((set, get) => ({
   bulkError: null,
   bulkFrames: [],
   bulkSelectedIdx: null,
+  bulkIsTimeSeries: true,
+  bulkAnnotatedVideo: null,
+  bulkBevVideo: null,
 
   setBulkMode: (on) => set({ bulkMode: on }),
   setBulkStatus: (status, error = null) => set({ bulkStatus: status, bulkError: error }),
   setBulkFrames: (frames) => set({ bulkFrames: frames, bulkStatus: 'done' }),
   setBulkSelectedIdx: (idx) => set({ bulkSelectedIdx: idx }),
+  setBulkIsTimeSeries: (isTimeSeries) => set({ bulkIsTimeSeries: !!isTimeSeries }),
+  setBulkVideos: (annotatedVideo, bevVideo) =>
+    set({ bulkAnnotatedVideo: annotatedVideo, bulkBevVideo: bevVideo }),
 
   // ── Chat ───────────────────────────────────────────────────────────────────
   chatOpen: false,

@@ -19,10 +19,14 @@ KITTI raw (date-level calib):
     [date/]calib_velo_to_cam.txt
 """
 import io
+import os
+import base64
+import tempfile
 import zipfile
 from pathlib import PurePosixPath
 
 import numpy as np
+import cv2
 
 from modules.loader import parse_calib_text, normalize_calib_dict, load_scene
 from modules.calibration import parse_calib
@@ -135,9 +139,49 @@ def _process_frame(bin_bytes: bytes, img_bytes: bytes, calib_dict: dict) -> dict
     }
 
 
+def _build_video_from_base64_frames(frames: list[dict], key: str, fps: float = 10.0) -> str | None:
+    """Encode a list of base64 PNG frames into a base64 MP4 string."""
+    if not frames:
+        return None
+
+    decoded_frames = []
+    for frame in frames:
+        b64 = frame.get(key)
+        if not b64:
+            continue
+        try:
+            img = cv2.imdecode(np.frombuffer(base64.b64decode(b64), dtype=np.uint8), cv2.IMREAD_COLOR)
+            if img is not None:
+                decoded_frames.append(img)
+        except Exception:
+            continue
+
+    if not decoded_frames:
+        return None
+
+    h, w = decoded_frames[0].shape[:2]
+    fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        writer = cv2.VideoWriter(tmp_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        if not writer.isOpened():
+            return None
+        for img in decoded_frames:
+            if img.shape[:2] != (h, w):
+                img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
+            writer.write(img)
+        writer.release()
+
+        with open(tmp_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 # ── Public entry point ─────────────────────────────────────────────────────────
 
-def process_zip(zip_bytes: bytes, max_frames: int = 20) -> dict:
+def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = True) -> dict:
     """
     Extract a KITTI ZIP, auto-detect format, run inference on up to max_frames
     frames, return a summary dict.
@@ -169,9 +213,15 @@ def process_zip(zip_bytes: bytes, max_frames: int = 20) -> dict:
             except Exception as exc:
                 errors.append(f"{stem}: {exc}")
 
+    video_annotated_mp4 = _build_video_from_base64_frames(frames, "annotated_image") if is_timeseries else None
+    video_bev_mp4 = _build_video_from_base64_frames(frames, "bev_image") if is_timeseries else None
+
     return {
         "frames":         frames,
         "total_found":    total_found,
         "processed":      len(frames),
         "skipped_errors": errors,
+        "is_timeseries":  bool(is_timeseries),
+        "video_annotated_mp4": video_annotated_mp4,
+        "video_bev_mp4":  video_bev_mp4,
     }

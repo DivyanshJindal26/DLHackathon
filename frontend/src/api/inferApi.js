@@ -34,12 +34,18 @@ export async function ragQuery(text, nResults = 5) {
   return res.json()
 }
 
-export async function runBulkInference(zipFile, maxFrames = 20) {
+export async function runBulkInference(zipFile, maxFrames = 20, isTimeSeries = true) {
   const form = new FormData()
   form.append('zip_file', zipFile)
   form.append('max_frames', maxFrames)
+  form.append('is_timeseries', String(isTimeSeries))
 
-  const res = await fetch(`/api/infer-bulk?max_frames=${maxFrames}`, {
+  const qs = new URLSearchParams({
+    max_frames: String(maxFrames),
+    is_timeseries: String(isTimeSeries),
+  })
+
+  const res = await fetch(`/api/infer-bulk?${qs.toString()}`, {
     method: 'POST',
     body: form,
   })

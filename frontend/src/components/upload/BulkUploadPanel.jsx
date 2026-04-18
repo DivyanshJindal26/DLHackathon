@@ -3,7 +3,20 @@ import useAppStore from '../../store/appStore'
 import { runBulkInference } from '../../api/inferApi'
 
 export default function BulkUploadPanel() {
-  const { bulkStatus, bulkError, bulkFrames, setBulkStatus, setBulkFrames, setResult, setBulkSelectedIdx } =
+  const {
+    bulkStatus,
+    bulkError,
+    bulkFrames,
+    bulkIsTimeSeries,
+    bulkAnnotatedVideo,
+    bulkBevVideo,
+    setBulkStatus,
+    setBulkFrames,
+    setResult,
+    setBulkSelectedIdx,
+    setBulkIsTimeSeries,
+    setBulkVideos,
+  } =
     useAppStore()
   const inputRef = useRef()
   const [zipFile, setZipFile] = useState(null)
@@ -23,8 +36,10 @@ export default function BulkUploadPanel() {
     if (!zipFile || processing) return
     setBulkStatus('processing')
     try {
-      const data = await runBulkInference(zipFile, maxFrames)
+      const data = await runBulkInference(zipFile, maxFrames, bulkIsTimeSeries)
+      setBulkIsTimeSeries(bulkIsTimeSeries)
       setBulkFrames(data.frames)
+      setBulkVideos(data.video_annotated_mp4 ?? null, data.video_bev_mp4 ?? null)
       if (data.frames.length > 0) {
         setResult(data.frames[0])
         setBulkSelectedIdx(0)
@@ -81,6 +96,32 @@ export default function BulkUploadPanel() {
         className="w-full h-0.5 accent-[#00e676] cursor-pointer"
       />
 
+      <div className="text-[9px] uppercase tracking-widest text-[#555] mt-1">Sequence mode</div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <button
+          type="button"
+          onClick={() => setBulkIsTimeSeries(true)}
+          className={`py-1.5 rounded text-[10px] uppercase tracking-wider border transition-colors ${
+            bulkIsTimeSeries
+              ? 'bg-[#00e676]/15 border-[#00e676]/40 text-[#00e676]'
+              : 'bg-[#111] border-white/[0.08] text-[#666] hover:text-[#aaa]'
+          }`}
+        >
+          Time Series
+        </button>
+        <button
+          type="button"
+          onClick={() => setBulkIsTimeSeries(false)}
+          className={`py-1.5 rounded text-[10px] uppercase tracking-wider border transition-colors ${
+            !bulkIsTimeSeries
+              ? 'bg-[#00e676]/15 border-[#00e676]/40 text-[#00e676]'
+              : 'bg-[#111] border-white/[0.08] text-[#666] hover:text-[#aaa]'
+          }`}
+        >
+          Independent
+        </button>
+      </div>
+
       <button
         onClick={run}
         disabled={!zipFile || processing}
@@ -110,7 +151,30 @@ export default function BulkUploadPanel() {
       {bulkStatus === 'done' && (
         <p className="text-[10px] text-[#00e676] text-center">
           {bulkFrames.length} frame{bulkFrames.length !== 1 ? 's' : ''} ready
+          {bulkIsTimeSeries ? ' + videos' : ''}
         </p>
+      )}
+
+      {bulkStatus === 'done' && bulkIsTimeSeries && bulkAnnotatedVideo && (
+        <div className="flex flex-col gap-2">
+          <p className="text-[9px] uppercase tracking-widest text-[#555]">Camera video</p>
+          <video
+            className="w-full rounded border border-white/[0.08] bg-black"
+            controls
+            src={`data:video/mp4;base64,${bulkAnnotatedVideo}`}
+          />
+        </div>
+      )}
+
+      {bulkStatus === 'done' && bulkIsTimeSeries && bulkBevVideo && (
+        <div className="flex flex-col gap-2">
+          <p className="text-[9px] uppercase tracking-widest text-[#555]">BEV video</p>
+          <video
+            className="w-full rounded border border-white/[0.08] bg-black"
+            controls
+            src={`data:video/mp4;base64,${bulkBevVideo}`}
+          />
+        </div>
       )}
     </div>
   )

@@ -11,7 +11,7 @@ import ChatPanel from './components/chatbot/ChatPanel'
 import useAppStore from './store/appStore'
 
 export default function App() {
-  const { activeTab, bulkMode, bulkFrames } = useAppStore()
+  const { activeTab, bulkMode, bulkFrames, bulkIsTimeSeries } = useAppStore()
 
   const tabContent = {
     camera:  <CameraTab />,
@@ -20,7 +20,7 @@ export default function App() {
     metrics: <MetricsTab />,
   }
 
-  const showScrubber = bulkMode && bulkFrames.length > 0
+  const showScrubber = bulkMode && bulkIsTimeSeries && bulkFrames.length > 0
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#000]">

@@ -198,12 +198,13 @@ async def infer_scene(scene_id: str):
 async def infer_bulk(
     zip_file:   UploadFile = File(...),
     max_frames: int = 20,
+    is_timeseries: bool = True,
 ):
     zip_bytes = await zip_file.read()
     if not zipfile.is_zipfile(io.BytesIO(zip_bytes)):
         raise HTTPException(status_code=400, detail="Not a valid ZIP archive.")
 
-    result = process_zip(zip_bytes, max_frames=max_frames)
+    result = process_zip(zip_bytes, max_frames=max_frames, is_timeseries=is_timeseries)
 
     # Store each bulk frame in ChromaDB
     for frame in result.get("frames", []):
