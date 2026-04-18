@@ -42,6 +42,39 @@ function buildBoxTraces(detections) {
   return traces
 }
 
+function buildLidarTrace(scenePoints) {
+  if (!Array.isArray(scenePoints) || scenePoints.length === 0) return null
+
+  const xs = []
+  const ys = []
+  const zs = []
+  for (const p of scenePoints) {
+    if (!Array.isArray(p) || p.length < 3) continue
+    xs.push(p[0])
+    ys.push(p[1])
+    zs.push(p[2])
+  }
+
+  if (xs.length === 0) return null
+
+  return {
+    type: 'scatter3d',
+    mode: 'markers',
+    x: xs,
+    y: ys,
+    z: zs,
+    marker: {
+      size: 1,
+      color: zs,
+      colorscale: 'Viridis',
+      opacity: 0.6,
+    },
+    name: 'LiDAR',
+    showlegend: true,
+    hoverinfo: 'skip',
+  }
+}
+
 export default function Scene3DTab() {
   const { result } = useAppStore()
   const containerRef = useRef(null)
@@ -52,6 +85,11 @@ export default function Scene3DTab() {
 
     import('plotly.js-dist-min').then((Plotly) => {
       const traces = buildBoxTraces(result.detections)
+
+      const lidarTrace = buildLidarTrace(result.scene_points)
+      if (lidarTrace) {
+        traces.unshift(lidarTrace)
+      }
 
       traces.push({
         type: 'scatter3d',

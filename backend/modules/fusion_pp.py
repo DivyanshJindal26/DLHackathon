@@ -381,6 +381,7 @@ def run_fused_pipeline(
         img_lidar   (H,W,3) uint8 BGR — camera image + LiDAR depth dots
         img_boxes   (H,W,3) uint8 BGR — camera image + 3D wireframes + labels
         final_dets  list of detection dicts (serialisable — corners as lists)
+        scene_points list of sampled LiDAR points [[x,y,z], ...] for 3D scene viz
         stats       dict {yolo_n, pp_raw_n, pp_gated_n, obb_n, final_n}
     """
     # ── Preprocess LiDAR ─────────────────────────────────────────────────────
@@ -499,4 +500,10 @@ def run_fused_pipeline(
             "distance_m":      round(float(np.linalg.norm(det["center"])), 2),
         })
 
-    return img_lidar, img_boxes, serial_dets, stats
+    # Notebook-like 3D point cloud uses all_points[::5].
+    scene_points = [
+        [round(float(p[0]), 3), round(float(p[1]), 3), round(float(p[2]), 3)]
+        for p in pts_xyz[::5]
+    ]
+
+    return img_lidar, img_boxes, serial_dets, scene_points, stats

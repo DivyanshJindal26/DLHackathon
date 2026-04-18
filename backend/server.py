@@ -80,7 +80,7 @@ async def infer(
     import cv2
     image_bgr = cv2.cvtColor(scene["image"], cv2.COLOR_RGB2BGR)
 
-    img_lidar, img_boxes, serial_dets, stats = run_fused_pipeline(
+    img_lidar, img_boxes, serial_dets, scene_points, stats = run_fused_pipeline(
         scene["points"], image_bgr, calib
     )
 
@@ -115,6 +115,7 @@ async def infer(
         "camera_image":    cv2_to_base64(img_boxes),
         "lidar_image":     cv2_to_base64(img_lidar),
         "lidar_bev":       lidar_bev,
+        "scene_points":    scene_points,
         "detections":      serial_dets,
         "pipeline_stats":  stats,
         "ground_truth":    ground_truth,
@@ -170,7 +171,7 @@ async def infer_scene(scene_id: str):
 
     import cv2
     image_bgr = cv2.cvtColor(scene["image"], cv2.COLOR_RGB2BGR)
-    img_lidar, img_boxes, serial_dets, stats = run_fused_pipeline(
+    img_lidar, img_boxes, serial_dets, scene_points, stats = run_fused_pipeline(
         scene["points"], image_bgr, calib
     )
     lidar_bev = render_lidar_bev_white(scene["points"][:, :3], serial_dets)
@@ -180,6 +181,7 @@ async def infer_scene(scene_id: str):
         "camera_image":      cv2_to_base64(img_boxes),
         "lidar_image":       cv2_to_base64(img_lidar),
         "lidar_bev":         lidar_bev,
+        "scene_points":      scene_points,
         "detections":        serial_dets,
         "pipeline_stats":    stats,
         "inference_time_ms": round((time.perf_counter() - t0) * 1000, 1),
