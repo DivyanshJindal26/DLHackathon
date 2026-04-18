@@ -61,12 +61,13 @@ CLASS_PRIORS = {
 
 YOLO_TO_PP_CLASS = {
     "car":        ["car", "vehicle"],
-    "truck":      ["truck", "vehicle"],
+    "truck":      ["truck", "car", "vehicle"],
     "bus":        ["car", "truck"],
     "person":     ["pedestrian"],
     "pedestrian": ["pedestrian"],
     "cyclist":    ["cyclist"],
     "bicycle":    ["cyclist"],
+    "motorcycle": ["cyclist"],
 }
 
 # BGR wireframe colors per confidence tier (matches notebook)
@@ -264,7 +265,7 @@ def box_iou_3d_centers(det_a, det_b, dist_thresh):
 # ── PP gating and merge (verbatim from notebook) ──────────────────────────────
 
 def gate_pp_with_yolo(pp_dets, yolo_boxes, calib, img_shape,
-                      iou_thresh=0.25, score_thresh=0.45):
+                      iou_thresh=0.10, score_thresh=0.35):
     gated = []
     for det in pp_dets:
         if det["score"] < score_thresh:
