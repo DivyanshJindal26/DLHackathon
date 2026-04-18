@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import useAppStore from '../../store/appStore'
 import { runBulkInference } from '../../api/inferApi'
+import BulkResultsGallery from '../bulk/BulkResultsGallery'
 
 export default function BulkUploadPanel() {
   const {
@@ -39,7 +40,10 @@ export default function BulkUploadPanel() {
       const data = await runBulkInference(zipFile, maxFrames, bulkIsTimeSeries)
       setBulkIsTimeSeries(bulkIsTimeSeries)
       setBulkFrames(data.frames)
-      setBulkVideos(data.video_annotated_mp4 ?? null, data.video_bev_mp4 ?? null)
+      setBulkVideos(
+        data.video_boxes_mp4 ?? data.video_annotated_mp4 ?? null,
+        data.video_lidar_mp4 ?? data.video_bev_mp4 ?? null,
+      )
       if (data.frames.length > 0) {
         setResult(data.frames[0])
         setBulkSelectedIdx(0)
@@ -174,6 +178,15 @@ export default function BulkUploadPanel() {
             controls
             src={`data:video/mp4;base64,${bulkBevVideo}`}
           />
+        </div>
+      )}
+
+      {bulkStatus === 'done' && bulkFrames.length > 0 && (
+        <div className="pt-1 border-t border-white/[0.06]">
+          <p className="text-[9px] uppercase tracking-widest text-[#555] mb-2">
+            {bulkIsTimeSeries ? 'Frames (sequence)' : 'Independent frame results'}
+          </p>
+          <BulkResultsGallery />
         </div>
       )}
     </div>

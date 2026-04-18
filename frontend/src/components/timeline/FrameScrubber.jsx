@@ -43,9 +43,9 @@ export default function FrameScrubber() {
                 : 'border-white/[0.06] opacity-60 hover:opacity-100'
             }`}
           >
-            {frame.camera_image ? (
+            {(frame.camera_image || frame.annotated_image) ? (
               <img
-                src={`data:image/png;base64,${frame.camera_image}`}
+                src={`data:image/png;base64,${frame.camera_image || frame.annotated_image}`}
                 className="w-full h-full object-cover"
                 alt={`frame ${i}`}
               />

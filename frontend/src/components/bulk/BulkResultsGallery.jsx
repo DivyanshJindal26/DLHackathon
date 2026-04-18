@@ -18,10 +18,16 @@ export default function BulkResultsGallery() {
       </p>
       <div className="overflow-y-auto max-h-[calc(100vh-220px)] pr-0.5 space-y-2">
         {bulkFrames.map((frame, idx) => {
-          const nCars       = frame.detections.filter(d => d.class === 'Car').length
-          const nPed        = frame.detections.filter(d => d.class === 'Pedestrian').length
-          const nOther      = frame.detections.length - nCars - nPed
+          const dets = frame.detections || []
+          const nCars = dets.filter((d) => (d.label || d.class || '').toLowerCase() === 'car').length
+          const nPed = dets.filter((d) => {
+            const cls = (d.label || d.class || '').toLowerCase()
+            return cls === 'pedestrian' || cls === 'person'
+          }).length
+          const nOther = dets.length - nCars - nPed
           const isSelected  = idx === bulkSelectedIdx
+          const thumb = frame.camera_image || frame.annotated_image
+          const inferenceMs = Number(frame.inference_time_ms || 0)
 
           return (
             <button
@@ -36,11 +42,17 @@ export default function BulkResultsGallery() {
             >
               {/* Thumbnail */}
               <div className="relative">
-                <img
-                  src={`data:image/png;base64,${frame.annotated_image}`}
-                  alt={`Frame ${frame.frame_id}`}
-                  className="w-full h-24 object-cover object-center"
-                />
+                {thumb ? (
+                  <img
+                    src={`data:image/png;base64,${thumb}`}
+                    alt={`Frame ${frame.frame_id}`}
+                    className="w-full h-24 object-cover object-center"
+                  />
+                ) : (
+                  <div className="w-full h-24 bg-[#111] flex items-center justify-center text-[10px] text-[#555]">
+                    no preview
+                  </div>
+                )}
                 {isSelected && (
                   <div className="absolute top-1 right-1 bg-blue-500 rounded-full w-4 h-4 flex items-center justify-center">
                     <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
@@ -72,7 +84,7 @@ export default function BulkResultsGallery() {
                     </span>
                   )}
                   <span className="text-[10px] text-slate-600 font-mono">
-                    {frame.inference_time_ms.toFixed(0)}ms
+                    {inferenceMs.toFixed(0)}ms
                   </span>
                 </div>
               </div>

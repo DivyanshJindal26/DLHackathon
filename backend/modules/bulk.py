@@ -30,9 +30,8 @@ import cv2
 
 from modules.loader import parse_calib_text, normalize_calib_dict, load_scene
 from modules.calibration import parse_calib
-from modules.detector import detect
-from modules.fusion_b import fuse_b
-from modules.visualizer import annotate_image, generate_bev, project_box3d, bbox_to_frustum_corners
+from modules.fusion_pp import run_fused_pipeline
+from modules.visualizer import render_lidar_bev_white, cv2_to_base64
 
 
 # ── ZIP content discovery ──────────────────────────────────────────────────────
@@ -100,40 +99,37 @@ def _build_calib_dict(zf: zipfile.ZipFile, cats: dict, stem: str) -> dict | None
     return None
 
 
+def _build_calib_with_proj(calib_raw: dict) -> dict:
+    """Build parsed calib plus T_velo_to_img, matching the notebook fusion path."""
+    calib_raw = normalize_calib_dict(calib_raw)
+    calib = parse_calib(calib_raw)
+    calib["T_velo_to_img"] = calib["P2"] @ calib["R0_rect"] @ calib["Tr_velo_to_cam"]
+    return calib
+
+
 # ── Per-frame pipeline ─────────────────────────────────────────────────────────
 
 def _process_frame(bin_bytes: bytes, img_bytes: bytes, calib_dict: dict) -> dict:
     import time
     t0 = time.perf_counter()
 
-    scene = load_scene(bin_bytes, img_bytes, b"")  # we pass calib separately
-    scene["calib"] = calib_dict                    # overwrite with normalised dict
+    scene = load_scene(bin_bytes, img_bytes, b"")
+    calib = _build_calib_with_proj(calib_dict)
 
-    calib_parsed = parse_calib(scene["calib"])
-    detections_2d = detect(scene["image"])
-    detections = fuse_b(detections_2d, scene["points"], calib_parsed, scene["image"].shape[:2])
-
-    P2 = calib_parsed.get("P2")
-    for det in detections:
-        corners_2d = None
-        if P2 is not None and det.get("box_3d"):
-            pts = project_box3d(det["box_3d"], P2)
-            if pts is not None:
-                near = pts[4:8].tolist()
-                far  = pts[0:4].tolist()
-                corners_2d = near + far
-        if corners_2d is None and P2 is not None and det.get("box_3d") and det.get("bbox_2d"):
-            length = float(det["box_3d"][5]) if det["box_3d"][5] > 0.1 else 4.0
-            corners_2d = bbox_to_frustum_corners(det["bbox_2d"], det["distance_m"], length, P2)
-        det["corners_2d"] = corners_2d
-
-    annotated = annotate_image(scene["image"], detections, calib_parsed)
-    bev = generate_bev(scene["points"], detections)
+    image_bgr = cv2.cvtColor(scene["image"], cv2.COLOR_RGB2BGR)
+    img_lidar, img_boxes, serial_dets, scene_points, scene_point_colors, stats = run_fused_pipeline(
+        scene["points"], image_bgr, calib
+    )
+    lidar_bev = render_lidar_bev_white(scene["points"][:, :3], serial_dets)
 
     return {
-        "annotated_image":   annotated,
-        "bev_image":         bev,
-        "detections":        detections,
+        "camera_image":      cv2_to_base64(img_boxes),
+        "lidar_image":       cv2_to_base64(img_lidar),
+        "lidar_bev":         lidar_bev,
+        "scene_points":      scene_points,
+        "scene_point_colors": scene_point_colors,
+        "detections":        serial_dets,
+        "pipeline_stats":    stats,
         "inference_time_ms": round((time.perf_counter() - t0) * 1000, 1),
         "num_points":        int(len(scene["points"])),
     }
@@ -213,8 +209,8 @@ def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = Tr
             except Exception as exc:
                 errors.append(f"{stem}: {exc}")
 
-    video_annotated_mp4 = _build_video_from_base64_frames(frames, "annotated_image") if is_timeseries else None
-    video_bev_mp4 = _build_video_from_base64_frames(frames, "bev_image") if is_timeseries else None
+    video_boxes_mp4 = _build_video_from_base64_frames(frames, "camera_image") if is_timeseries else None
+    video_lidar_mp4 = _build_video_from_base64_frames(frames, "lidar_image") if is_timeseries else None
 
     return {
         "frames":         frames,
@@ -222,6 +218,8 @@ def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = Tr
         "processed":      len(frames),
         "skipped_errors": errors,
         "is_timeseries":  bool(is_timeseries),
-        "video_annotated_mp4": video_annotated_mp4,
-        "video_bev_mp4":  video_bev_mp4,
+        "video_boxes_mp4": video_boxes_mp4,
+        "video_lidar_mp4": video_lidar_mp4,
+        "video_annotated_mp4": video_boxes_mp4,
+        "video_bev_mp4":  video_lidar_mp4,
     }
