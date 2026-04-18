@@ -52,7 +52,7 @@ function MetricsSection({ metrics }) {
       ? (2 * precision * recall) / (precision + recall)
       : null
   )
-  const iouThreshold = summary.iou_threshold ?? 0.3
+  const distThreshold = summary.dist_threshold_m ?? 3.0
 
   const tp = summary.true_positives
     ?? summary.matched
@@ -65,12 +65,15 @@ function MetricsSection({ metrics }) {
   return (
     <div className="amoled-panel p-4">
       <div className="text-[10px] uppercase tracking-widest text-[#555] mb-3">
-        GT Evaluation — IoU@{iouThreshold}
+        GT Evaluation — Dist@{distThreshold}m
       </div>
       <div className="flex gap-4 flex-wrap">
         <StatCard label="Precision" value={precision != null ? (precision * 100).toFixed(1) : null} unit="%" color="#00e676" />
         <StatCard label="Recall"    value={recall != null ? (recall * 100).toFixed(1) : null}       unit="%" color="#2979ff" />
         <StatCard label="F1"        value={f1 != null ? (f1 * 100).toFixed(1) : null}               unit="%" color="#ffab00" />
+        <StatCard label="Accuracy"  value={summary.accuracy != null ? (summary.accuracy * 100).toFixed(1) : null} unit="%" color="#f0f0f0" />
+        <StatCard label="Mean Dist" value={summary.mae_distance_m != null ? summary.mae_distance_m.toFixed(2) : null} unit="m" color="#f0f0f0" />
+        <StatCard label="Mean IoU" value={summary.mean_iou_2d != null ? summary.mean_iou_2d.toFixed(3) : null} color="#f0f0f0" />
         <StatCard label="TP" value={tp} color="#00e676" />
         <StatCard label="FP" value={fp} color="#ff3d71" />
         <StatCard label="FN" value={fn} color="#ffab00" />

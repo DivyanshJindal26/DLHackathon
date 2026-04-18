@@ -83,6 +83,44 @@ function buildLidarTrace(scenePoints, scenePointColors) {
   }
 }
 
+function buildCentroidTrace(detections) {
+  if (!Array.isArray(detections) || detections.length === 0) return null
+
+  const xs = []
+  const ys = []
+  const zs = []
+  const labels = []
+  const colors = []
+
+  for (const d of detections) {
+    const c = d?.center
+    if (!Array.isArray(c) || c.length < 3) continue
+    const detClass = d.label ?? d.class ?? 'object'
+    xs.push(c[0])
+    ys.push(c[1])
+    zs.push(c[2])
+    labels.push(`${detClass}<br>${(d.distance_m ?? 0).toFixed(1)}m<br>${((d.score ?? d.confidence ?? 0) * 100).toFixed(0)}%`)
+    colors.push(BOX_COLORS[detClass.toLowerCase()] || 'white')
+  }
+
+  if (xs.length === 0) return null
+
+  return {
+    type: 'scatter3d',
+    mode: 'markers+text',
+    x: xs,
+    y: ys,
+    z: zs,
+    text: labels,
+    textposition: 'top center',
+    textfont: { size: 9, color: 'white' },
+    marker: { size: 4, color: colors, opacity: 0.9 },
+    name: 'Centers',
+    showlegend: false,
+    hoverinfo: 'text',
+  }
+}
+
 export default function Scene3DTab() {
   const { result } = useAppStore()
   const containerRef = useRef(null)
@@ -97,6 +135,11 @@ export default function Scene3DTab() {
       const lidarTrace = buildLidarTrace(result.scene_points, result.scene_point_colors)
       if (lidarTrace) {
         traces.unshift(lidarTrace)
+      }
+
+      const centroidTrace = buildCentroidTrace(result.detections)
+      if (centroidTrace) {
+        traces.push(centroidTrace)
       }
 
       traces.push({
