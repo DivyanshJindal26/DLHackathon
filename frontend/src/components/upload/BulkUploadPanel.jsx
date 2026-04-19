@@ -21,7 +21,6 @@ export default function BulkUploadPanel() {
     useAppStore()
   const inputRef = useRef()
   const [zipFile, setZipFile] = useState(null)
-  const [maxFrames, setMaxFrames] = useState(20)
   const [dragging, setDragging] = useState(false)
 
   const processing = bulkStatus === 'processing'
@@ -37,7 +36,7 @@ export default function BulkUploadPanel() {
     if (!zipFile || processing) return
     setBulkStatus('processing')
     try {
-      const data = await runBulkInference(zipFile, maxFrames, bulkIsTimeSeries)
+      const data = await runBulkInference(zipFile, bulkIsTimeSeries)
       setBulkIsTimeSeries(bulkIsTimeSeries)
       setBulkFrames(data.frames)
       setBulkVideos(
@@ -89,16 +88,6 @@ export default function BulkUploadPanel() {
           </div>
         )}
       </div>
-
-      <div className="flex items-center justify-between text-[10px]">
-        <span className="text-[#555]">Max frames</span>
-        <span className="text-[#f0f0f0] tabular-nums">{maxFrames}</span>
-      </div>
-      <input
-        type="range" min={1} max={50} value={maxFrames}
-        onChange={(e) => setMaxFrames(Number(e.target.value))}
-        className="w-full h-0.5 accent-[#00e676] cursor-pointer"
-      />
 
       <div className="text-[9px] uppercase tracking-widest text-[#555] mt-1">Sequence mode</div>
       <div className="grid grid-cols-2 gap-1.5">

@@ -141,7 +141,11 @@ def _process_frame(bin_bytes: bytes, img_bytes: bytes, calib_dict: dict) -> dict
 
 
 def _build_video_from_base64_frames(frames: list[dict], key: str, fps: float = 10.0) -> str | None:
-    """Encode a list of base64 PNG frames into a base64 MP4 string."""
+    """
+    Encode a list of base64 PNG frames into a browser-playable H.264 MP4 (base64).
+    Strategy: write frames as JPEGs to a temp dir, then encode with ffmpeg (H.264).
+    Falls back to cv2 avc1 → mp4v if ffmpeg is not available.
+    """
     if not frames:
         return None
 
@@ -161,56 +165,88 @@ def _build_video_from_base64_frames(frames: list[dict], key: str, fps: float = 1
         return None
 
     h, w = decoded_frames[0].shape[:2]
-    fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
-    os.close(fd)
+    # Ensure even dimensions — H.264 requires width/height divisible by 2
+    w = w if w % 2 == 0 else w - 1
+    h = h if h % 2 == 0 else h - 1
+
+    tmp_dir = tempfile.mkdtemp()
+    out_path = os.path.join(tmp_dir, "out.mp4")
     try:
-        writer = cv2.VideoWriter(tmp_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-        if not writer.isOpened():
-            return None
-        for img in decoded_frames:
+        # Write frames as numbered JPEGs
+        for i, img in enumerate(decoded_frames):
             if img.shape[:2] != (h, w):
                 img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
-            writer.write(img)
-        writer.release()
+            cv2.imwrite(os.path.join(tmp_dir, f"frame_{i:06d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
 
-        with open(tmp_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("ascii")
+        # Try ffmpeg first — produces browser-native H.264
+        import subprocess
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", os.path.join(tmp_dir, "frame_%06d.jpg"),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+        if result.returncode == 0 and os.path.exists(out_path):
+            with open(out_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("ascii")
+
+        # ffmpeg failed — fall back to cv2 avc1 then mp4v
+        print(f"[bulk] ffmpeg failed: {result.stderr.decode()[:200]}", flush=True)
+        for fourcc_str in ("avc1", "mp4v"):
+            writer = cv2.VideoWriter(
+                out_path, cv2.VideoWriter_fourcc(*fourcc_str), fps, (w, h)
+            )
+            if writer.isOpened():
+                for img in decoded_frames:
+                    if img.shape[:2] != (h, w):
+                        img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
+                    writer.write(img)
+                writer.release()
+                if os.path.getsize(out_path) > 0:
+                    with open(out_path, "rb") as f:
+                        return base64.b64encode(f.read()).decode("ascii")
+            writer.release()
+
+        return None
+
+    except Exception as exc:
+        print(f"[bulk] video encode error: {exc}", flush=True)
+        return None
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
-def process_zip(zip_bytes: bytes, max_frames: int = 20, is_timeseries: bool = True) -> dict:
+def process_zip(zip_bytes: bytes, is_timeseries: bool = True) -> dict:
     """
-    Extract a KITTI ZIP, auto-detect format, run inference on up to max_frames
-    frames, return a summary dict.
+    Extract a KITTI ZIP, auto-detect format, run inference on ALL frames,
+    return a summary dict.
     """
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         names = [n for n in zf.namelist() if not n.endswith("/")]
         cats = _categorise(names)
 
-        # Follow KITTI frame ordering: iterate in camera timeline order, then filter
-        # to valid frames with required files.
         camera_order = sorted(cats["png"].keys(), key=_frame_sort_key)
 
-        # Process only frames that have all required per-frame files.
-        # If per-frame calib exists in the ZIP, require it as well.
         if cats["calib_frame"]:
             common = set(cats["bin"]) & set(cats["png"]) & set(cats["calib_frame"])
         else:
-            # Raw KITTI style uses date-level calib files, so stem-wise pair is bin+png.
             common = set(cats["bin"]) & set(cats["png"])
 
         common_stems = [s for s in camera_order if s in common]
-
         total_found = len(common_stems)
-        stems_to_run = common_stems[:max_frames]
 
         frames = []
         errors = []
-        for stem in stems_to_run:
+        for stem in common_stems:
             try:
                 calib_dict = _build_calib_dict(zf, cats, stem)
                 if calib_dict is None or "P2" not in calib_dict:
