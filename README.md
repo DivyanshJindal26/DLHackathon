@@ -207,20 +207,6 @@ If PointPillars is not loaded (env vars not configured, checkpoint missing, or a
 
 ---
 
-## Timing
-
-Measured on an RTX 3060. PointPillars on CPU is substantially slower.
-
-| Step | Time |
-|------|------|
-| Load + calibration | ~3ms |
-| YOLOv8l | ~12ms |
-| PointPillars (GPU) | ~18ms |
-| Tier 1/2/3 fusion | ~3ms |
-| BEV + visualisation | ~6ms |
-| Total | ~42ms |
-
----
 
 ## Running locally
 
