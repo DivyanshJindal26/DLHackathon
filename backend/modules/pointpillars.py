@@ -108,21 +108,36 @@ def run_pointpillars(pts_xyz: np.ndarray, score_thresh: float = 0.4) -> list:
             pred_dicts, _ = _pp_model.forward(data_dict)
 
         pred   = pred_dicts[0]
-        boxes  = pred["pred_boxes"].cpu().numpy()   # (M, 7): x,y,z,l,w,h,yaw
-        scores = pred["pred_scores"].cpu().numpy()  # (M,)
-        labels = pred["pred_labels"].cpu().numpy()  # (M,) 1-indexed
+        boxes_t = pred["pred_boxes"]                    # tensor (M, 7)
+        scores  = pred["pred_scores"].cpu().numpy()     # (M,)
+        labels  = pred["pred_labels"].cpu().numpy()     # (M,) 1-indexed
+        boxes   = boxes_t.cpu().numpy()
 
-        from modules.fusion_pp import box_lwh_center_to_corners
+        # Use OpenPCDet's native corner computation (more accurate than manual).
+        # Falls back to custom function if pcdet.utils not available.
+        try:
+            from pcdet.utils import box_utils as _bu
+            corners_all = (
+                _bu.boxes_to_corners_3d(boxes_t).cpu().numpy()
+                if len(boxes_t) > 0 else np.zeros((0, 8, 3), dtype=np.float32)
+            )
+            use_native = True
+        except Exception:
+            from modules.fusion_pp import box_lwh_center_to_corners
+            use_native = False
 
         detections = []
         for i in range(len(boxes)):
             if scores[i] < score_thresh:
                 continue
             x, y, z, l, w, h, yaw = boxes[i]
-            label   = LABEL_MAP.get(int(labels[i]), "unknown")
-            center  = np.array([x, y, z], dtype=np.float32)
-            dims    = np.array([l, w, h], dtype=np.float32)
-            corners = box_lwh_center_to_corners(center, l, w, h, yaw)
+            label  = LABEL_MAP.get(int(labels[i]), "unknown")
+            center = np.array([x, y, z], dtype=np.float32)
+            dims   = np.array([l, w, h], dtype=np.float32)
+            if use_native:
+                corners = corners_all[i].astype(np.float32)
+            else:
+                corners = box_lwh_center_to_corners(center, l, w, h, yaw)
             detections.append({
                 "label":   label,
                 "score":   float(scores[i]),

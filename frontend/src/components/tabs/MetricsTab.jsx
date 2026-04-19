@@ -20,11 +20,12 @@ function StatCard({ label, value, unit = '', color = '#f0f0f0' }) {
 function PipelineBar({ stats }) {
   if (!stats) return null
   const items = [
-    { label: 'YOLO',     value: stats.yolo_n    ?? 0, color: '#ffab00' },
-    { label: 'PP raw',   value: stats.pp_raw_n  ?? 0, color: '#2979ff' },
-    { label: 'PP gated', value: stats.pp_gated_n ?? 0, color: '#2979ff' },
-    { label: 'OBB',      value: stats.obb_n     ?? 0, color: '#00e676' },
-    { label: 'Final',    value: stats.final_n   ?? 0, color: '#00e676' },
+    { label: 'YOLO',      value: stats.yolo_n         ?? 0, color: '#ffab00' },
+    { label: 'PP raw',    value: stats.pp_raw_n        ?? 0, color: '#2979ff' },
+    { label: 'T1 Fused',  value: stats.tier1_fused_n  ?? 0, color: '#00e5ff' },
+    { label: 'T2 Gated',  value: stats.pp_gated_n     ?? 0, color: '#2979ff' },
+    { label: 'T3 OBB',    value: stats.obb_n           ?? 0, color: '#00e676' },
+    { label: 'Final',     value: stats.final_n         ?? 0, color: '#ff3d71' },
   ]
   return (
     <div className="amoled-panel p-4">
