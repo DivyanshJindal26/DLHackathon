@@ -19,7 +19,7 @@ from modules.calibration import parse_calib
 from modules.fusion_pp import run_fused_pipeline
 from modules.visualizer import render_lidar_bev_white, cv2_to_base64, generate_bev
 from modules.chroma_store import store_scene, query_scenes
-from modules.synthetic import generate_synthetic_scene, get_synthetic_detections
+from modules.synthetic import generate_synthetic_scene
 from modules.label_parser import parse_label_file
 from modules.metrics import match_and_evaluate
 from modules.bulk import process_zip
@@ -34,6 +34,10 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+
+
+# Latest loaded scene detections for /query tool calls.
+_LAST_SCENE_DETECTIONS: list[dict] = []
 
 
 # ── Calib helper ───────────────────────────────────────────────────────────────
@@ -92,6 +96,8 @@ async def infer(
 
     # Store in ChromaDB for RAG
     store_scene(frame_id, serial_dets, int(len(scene["points"])))
+    global _LAST_SCENE_DETECTIONS
+    _LAST_SCENE_DETECTIONS = serial_dets
 
     # Optional GT evaluation
     ground_truth = None
@@ -176,6 +182,8 @@ async def infer_scene(scene_id: str):
     )
     lidar_bev = render_lidar_bev_white(scene["points"][:, :3], serial_dets)
     store_scene(scene_id, serial_dets, int(len(scene["points"])))
+    global _LAST_SCENE_DETECTIONS
+    _LAST_SCENE_DETECTIONS = serial_dets
 
     return {
         "camera_image":      cv2_to_base64(img_boxes),
@@ -211,6 +219,11 @@ async def infer_bulk(
         dets = frame.get("detections", [])
         npts = frame.get("num_points", 0)
         store_scene(fid, dets, npts)
+
+    frames = result.get("frames", [])
+    if frames:
+        global _LAST_SCENE_DETECTIONS
+        _LAST_SCENE_DETECTIONS = frames[0].get("detections", [])
 
     return result
 
@@ -277,13 +290,43 @@ class QueryRequest(BaseModel):
 
 @app.post("/query")
 async def query_scene(req: QueryRequest):
-    objects  = get_synthetic_detections(seed=42, n=6)
-    keywords = req.text.lower().split()
-    results  = [
-        d for d in objects
-        if any(k in d["class"].lower() for k in keywords)
-        or any(k in ("car", "vehicle", "object") for k in keywords)
-    ]
+    objects = _LAST_SCENE_DETECTIONS
+    if not objects:
+        return {"results": [], "query": req.text}
+
+    q = req.text.lower()
+    keywords = set(q.split())
+    aliases = {
+        "car": {"car", "cars", "vehicle", "vehicles", "auto", "autos"},
+        "pedestrian": {"pedestrian", "pedestrians", "person", "people", "human"},
+        "cyclist": {"cyclist", "cyclists", "bicycle", "bike", "bikes"},
+        "truck": {"truck", "trucks", "lorry"},
+        "van": {"van", "vans"},
+    }
+
+    expanded = set(keywords)
+    for cls, words in aliases.items():
+        if keywords & words:
+            expanded.add(cls)
+
+    results = []
+    for d in objects:
+        cls = str(d.get("label") or d.get("class") or "").lower()
+        if not expanded:
+            match = True
+        elif "object" in expanded or "objects" in expanded:
+            match = True
+        else:
+            match = cls in expanded or any(tok in cls for tok in expanded)
+
+        if not match:
+            continue
+
+        if req.max_distance_m is not None and d.get("distance_m", 999) > req.max_distance_m:
+            continue
+
+        results.append(d)
+
     if req.max_distance_m is not None:
         results = [d for d in results if d.get("distance_m", 999) <= req.max_distance_m]
     return {"results": results, "query": req.text}

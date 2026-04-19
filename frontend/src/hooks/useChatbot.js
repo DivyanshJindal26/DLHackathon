@@ -8,10 +8,20 @@ function buildSystemPrompt(result) {
   if (!result) {
     return 'You are a LiDAR + Camera Fusion perception assistant. No scene has been loaded yet. Ask the user to upload a scene first.'
   }
-  const summary = result.detections
+  const detections = result.detections || []
+  const summary = detections
     .map(
-      (d) =>
-        `- ${d.class}: ${d.distance_m?.toFixed(1) ?? '?'}m away, confidence ${Math.round((d.confidence ?? 0) * 100)}%, position [${(d.xyz ?? []).map((v) => v.toFixed(1)).join(', ')}]`
+      (d) => {
+        const cls = d.label ?? d.class ?? 'unknown'
+        const conf = d.score ?? d.confidence ?? null
+        const pos = d.center ?? d.xyz ?? []
+        const confText = conf == null ? '?' : Math.round(conf * 100)
+        const posText = Array.isArray(pos)
+          ? pos.map((v) => (typeof v === 'number' ? v.toFixed(1) : String(v))).join(', ')
+          : ''
+        const distText = typeof d.distance_m === 'number' ? d.distance_m.toFixed(1) : '?'
+        return `- ${cls}: ${distText}m away, confidence ${confText}%, position [${posText}]`
+      }
     )
     .join('\n')
 
@@ -19,7 +29,7 @@ function buildSystemPrompt(result) {
 
 Scene stats: ${result.num_points?.toLocaleString() ?? '?'} LiDAR points processed in ${result.inference_time_ms ?? '?'}ms.
 
-Detected objects (${result.detections.length} total):
+Detected objects (${detections.length} total):
 ${summary || '(none)'}
 
 Use the query_scene tool to search for specific objects or answer semantic questions about the scene. Be concise and reference actual numbers from the data. When mentioning distances, be precise.`
