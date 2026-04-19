@@ -4,16 +4,47 @@ import { sendChat } from '../api/chatApi'
 import { queryScene } from '../api/queryApi'
 import useAppStore from '../store/appStore'
 
+function getClassCounts(detections = []) {
+  return detections.reduce((acc, d) => {
+    const cls = String(d.label ?? d.class ?? 'unknown').toLowerCase()
+    acc[cls] = (acc[cls] || 0) + 1
+    return acc
+  }, {})
+}
+
+function enforceSceneConsistency(answer, result) {
+  if (!result?.detections?.length || !answer) return answer
+
+  const counts = getClassCounts(result.detections)
+  const text = answer.toLowerCase()
+  const contradictions = []
+
+  const checks = [
+    { cls: 'car', regex: /(no\s+cars?|0\s+cars?|zero\s+cars?)/i },
+    { cls: 'pedestrian', regex: /(no\s+pedestrians?|0\s+pedestrians?|zero\s+pedestrians?)/i },
+    { cls: 'cyclist', regex: /(no\s+cyclists?|0\s+cyclists?|zero\s+cyclists?)/i },
+    { cls: 'truck', regex: /(no\s+trucks?|0\s+trucks?|zero\s+trucks?)/i },
+    { cls: 'van', regex: /(no\s+vans?|0\s+vans?|zero\s+vans?)/i },
+  ]
+
+  for (const { cls, regex } of checks) {
+    const n = counts[cls] || 0
+    if (n > 0 && regex.test(text)) {
+      contradictions.push(`${n} ${cls}${n !== 1 ? 's' : ''}`)
+    }
+  }
+
+  if (!contradictions.length) return answer
+
+  return `Data consistency correction: The current scene contains ${contradictions.join(', ')}, so the earlier zero-count statement is incorrect.\n\n${answer}`
+}
+
 function buildSystemPrompt(result) {
   if (!result) {
     return 'You are a LiDAR + Camera Fusion perception assistant. No scene has been loaded yet. Ask the user to upload a scene first.'
   }
   const detections = result.detections || []
-  const classCounts = detections.reduce((acc, d) => {
-    const cls = String(d.label ?? d.class ?? 'unknown').toLowerCase()
-    acc[cls] = (acc[cls] || 0) + 1
-    return acc
-  }, {})
+  const classCounts = getClassCounts(detections)
 
   const classCountLines = Object.entries(classCounts)
     .sort((a, b) => b[1] - a[1])
@@ -45,6 +76,12 @@ OPERATING RULES (STRICT):
 4. If detections are empty, state that clearly and suggest rerunning inference/upload.
 5. Keep responses concise, numeric, and evidence-based.
 6. When giving counts, include the source (loaded detections vs query result).
+
+RESPONSE STYLE (MANDATORY):
+1. Write in a professional technical tone.
+2. Prefer short structured answers: finding -> evidence -> conclusion.
+3. Include concrete numbers whenever available.
+4. Avoid vague wording such as "probably" unless explicitly uncertain.
 
 SCHEMA NOTES:
 - Preferred detection keys: label, score, distance_m, center, bbox_2d.
@@ -178,7 +215,7 @@ export function useChatbot() {
           })
         }
 
-        const finalText = response.content ?? ''
+        const finalText = enforceSceneConsistency(response.content ?? '', result)
         updateLastChatMessage({ content: finalText, loading: false, toolCall: undefined })
         history.push({ role: 'assistant', content: finalText })
         setConversationHistory(history)
