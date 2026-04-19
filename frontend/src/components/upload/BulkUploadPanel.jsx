@@ -3,6 +3,20 @@ import useAppStore from '../../store/appStore'
 import { runBulkInference } from '../../api/inferApi'
 import BulkResultsGallery from '../bulk/BulkResultsGallery'
 
+function VideoBlock({ label, src }) {
+  if (!src) return null
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-[9px] uppercase tracking-widest text-[#555]">{label}</p>
+      <video
+        className="w-full rounded border border-white/[0.08] bg-black"
+        controls
+        src={`data:video/mp4;base64,${src}`}
+      />
+    </div>
+  )
+}
+
 export default function BulkUploadPanel() {
   const {
     bulkStatus,
@@ -10,6 +24,7 @@ export default function BulkUploadPanel() {
     bulkFrames,
     bulkIsTimeSeries,
     bulkAnnotatedVideo,
+    bulkLidarVideo,
     bulkBevVideo,
     setBulkStatus,
     setBulkFrames,
@@ -17,8 +32,7 @@ export default function BulkUploadPanel() {
     setBulkSelectedIdx,
     setBulkIsTimeSeries,
     setBulkVideos,
-  } =
-    useAppStore()
+  } = useAppStore()
   const inputRef = useRef()
   const [zipFile, setZipFile] = useState(null)
   const [dragging, setDragging] = useState(false)
@@ -40,8 +54,9 @@ export default function BulkUploadPanel() {
       setBulkIsTimeSeries(bulkIsTimeSeries)
       setBulkFrames(data.frames)
       setBulkVideos(
-        data.video_boxes_mp4 ?? data.video_annotated_mp4 ?? null,
-        data.video_lidar_mp4 ?? data.video_bev_mp4 ?? null,
+        data.video_annotated_mp4 ?? null,
+        data.video_lidar_mp4 ?? null,
+        data.video_bev_mp4 ?? null,
       )
       if (data.frames.length > 0) {
         setResult(data.frames[0])
@@ -51,6 +66,8 @@ export default function BulkUploadPanel() {
       setBulkStatus('error', e.message)
     }
   }
+
+  const showVideos = bulkStatus === 'done' && bulkIsTimeSeries
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -144,29 +161,16 @@ export default function BulkUploadPanel() {
       {bulkStatus === 'done' && (
         <p className="text-[10px] text-[#00e676] text-center">
           {bulkFrames.length} frame{bulkFrames.length !== 1 ? 's' : ''} ready
-          {bulkIsTimeSeries ? ' + videos' : ''}
+          {bulkIsTimeSeries ? ' · videos below' : ''}
         </p>
       )}
 
-      {bulkStatus === 'done' && bulkIsTimeSeries && bulkAnnotatedVideo && (
-        <div className="flex flex-col gap-2">
-          <p className="text-[9px] uppercase tracking-widest text-[#555]">Camera video</p>
-          <video
-            className="w-full rounded border border-white/[0.08] bg-black"
-            controls
-            src={`data:video/mp4;base64,${bulkAnnotatedVideo}`}
-          />
-        </div>
-      )}
-
-      {bulkStatus === 'done' && bulkIsTimeSeries && bulkBevVideo && (
-        <div className="flex flex-col gap-2">
-          <p className="text-[9px] uppercase tracking-widest text-[#555]">BEV video</p>
-          <video
-            className="w-full rounded border border-white/[0.08] bg-black"
-            controls
-            src={`data:video/mp4;base64,${bulkBevVideo}`}
-          />
+      {showVideos && (
+        <div className="flex flex-col gap-3 pt-1 border-t border-white/[0.06]">
+          <p className="text-[9px] uppercase tracking-widest text-[#555]">Sequence videos</p>
+          <VideoBlock label="Annotated camera" src={bulkAnnotatedVideo} />
+          <VideoBlock label="LiDAR overlay"    src={bulkLidarVideo} />
+          <VideoBlock label="Bird's eye view"  src={bulkBevVideo} />
         </div>
       )}
 

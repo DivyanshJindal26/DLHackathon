@@ -4,6 +4,8 @@ import { sendChat } from '../api/chatApi'
 import { queryScene } from '../api/queryApi'
 import useAppStore from '../store/appStore'
 
+// ── Detection helpers ──────────────────────────────────────────────────────────
+
 function getClassCounts(detections = []) {
   return detections.reduce((acc, d) => {
     const cls = String(d.label ?? d.class ?? 'unknown').toLowerCase()
@@ -12,121 +14,193 @@ function getClassCounts(detections = []) {
   }, {})
 }
 
-function enforceSceneConsistency(answer, result) {
-  if (!result?.detections?.length || !answer) return answer
+function fmtDet(d) {
+  const cls  = d.label ?? d.class ?? 'unknown'
+  const conf = d.score ?? d.confidence
+  const dist = typeof d.distance_m === 'number' ? d.distance_m.toFixed(1) : '?'
+  const pos  = d.center ?? d.xyz ?? []
+  const posStr = Array.isArray(pos)
+    ? pos.map((v) => (typeof v === 'number' ? v.toFixed(1) : v)).join(', ')
+    : ''
+  const confStr = conf == null ? '' : ` (${Math.round(conf * 100)}%)`
+  const tierStr = d.confidence_tier ? ` [${d.confidence_tier}]` : ''
+  return `  - ${cls}${confStr}: ${dist}m @ [${posStr}]${tierStr}`
+}
 
-  const counts = getClassCounts(result.detections)
-  const text = answer.toLowerCase()
-  const contradictions = []
+function frameDetectionLine(frame) {
+  const dets = frame.detections ?? []
+  const counts = getClassCounts(dets)
+  const summary = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cls, n]) => `${cls}×${n}`)
+    .join(', ')
+  const avgDist = dets.length
+    ? (dets.reduce((s, d) => s + (d.distance_m ?? 0), 0) / dets.length).toFixed(1)
+    : '?'
+  return `  Frame ${frame.frame_id ?? '?'}: ${dets.length} obj — ${summary || 'none'} | avg dist ${avgDist}m | ${frame.inference_time_ms ?? '?'}ms`
+}
 
+// ── Consistency check ──────────────────────────────────────────────────────────
+
+function enforceSceneConsistency(answer, detections = []) {
+  if (!detections.length || !answer) return answer
+  const counts = getClassCounts(detections)
   const checks = [
-    { cls: 'car', regex: /(no\s+cars?|0\s+cars?|zero\s+cars?)/i },
-    { cls: 'pedestrian', regex: /(no\s+pedestrians?|0\s+pedestrians?|zero\s+pedestrians?)/i },
-    { cls: 'cyclist', regex: /(no\s+cyclists?|0\s+cyclists?|zero\s+cyclists?)/i },
-    { cls: 'truck', regex: /(no\s+trucks?|0\s+trucks?|zero\s+trucks?)/i },
-    { cls: 'van', regex: /(no\s+vans?|0\s+vans?|zero\s+vans?)/i },
+    { cls: 'car',        re: /(no\s+cars?|0\s+cars?|zero\s+cars?)/i },
+    { cls: 'pedestrian', re: /(no\s+pedestrians?|0\s+pedestrians?|zero\s+pedestrians?)/i },
+    { cls: 'cyclist',    re: /(no\s+cyclists?|0\s+cyclists?|zero\s+cyclists?)/i },
+    { cls: 'truck',      re: /(no\s+trucks?|0\s+trucks?|zero\s+trucks?)/i },
   ]
+  const contradictions = checks
+    .filter(({ cls, re }) => (counts[cls] ?? 0) > 0 && re.test(answer))
+    .map(({ cls }) => `${counts[cls]} ${cls}(s)`)
+  if (!contradictions.length) return answer
+  return `[Data correction: scene contains ${contradictions.join(', ')}]\n\n${answer}`
+}
 
-  for (const { cls, regex } of checks) {
-    const n = counts[cls] || 0
-    if (n > 0 && regex.test(text)) {
-      contradictions.push(`${n} ${cls}${n !== 1 ? 's' : ''}`)
+// ── System prompt builders ─────────────────────────────────────────────────────
+
+const RULES = `OPERATING RULES (STRICT):
+1. Use only the provided scene data and tool outputs — never invent objects or counts.
+2. For count/presence questions call query_scene before answering if any ambiguity exists.
+3. Never claim zero detections of a class that appears in the data.
+4. Keep answers concise: finding → evidence → conclusion. Include exact numbers.
+5. Distances are in metres. Confidence scores are 0–1 (multiply by 100 for %).
+
+SCHEMA: label, score, distance_m, center [x,y,z], bbox_2d, confidence_tier, source.
+
+CLASS ALIASES: car/vehicle → car | person/pedestrian → pedestrian | bicycle/cyclist → cyclist`
+
+function buildSingleFramePrompt(result) {
+  if (!result) {
+    return 'You are a LiDAR+Camera Fusion perception assistant. No scene loaded — ask the user to upload one.'
+  }
+  const dets   = result.detections ?? []
+  const counts = getClassCounts(dets)
+  const stats  = result.pipeline_stats ?? {}
+
+  const countLines = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cls, n]) => `  ${cls}: ${n}`)
+    .join('\n') || '  (none)'
+
+  const detLines = dets.map(fmtDet).join('\n') || '  (none)'
+
+  return `You are a LiDAR+Camera Fusion perception assistant analyzing a KITTI autonomous driving scene.
+
+${RULES}
+
+SCENE STATS:
+  LiDAR points: ${result.num_points?.toLocaleString() ?? '?'}
+  Inference time: ${result.inference_time_ms ?? '?'} ms
+  Pipeline: YOLO ${stats.yolo_n ?? '?'} | PP_raw ${stats.pp_raw_n ?? '?'} | T1_fused ${stats.tier1_fused_n ?? '?'} | T2_gated ${stats.pp_gated_n ?? '?'} | T3_obb ${stats.obb_n ?? '?'} | final ${stats.final_n ?? '?'}
+
+CLASS COUNTS (${dets.length} total detections):
+${countLines}
+
+ALL DETECTIONS:
+${detLines}
+
+Use query_scene to answer semantic or filtered questions. Reference actual numbers from the data above.`
+}
+
+function buildTemporalPrompt(result, bulkFrames, bulkSelectedIdx) {
+  const totalFrames = bulkFrames.length
+  const currentFrame = bulkFrames[bulkSelectedIdx ?? 0] ?? result
+
+  // Global aggregated stats across all frames
+  const globalCounts = {}
+  const globalDistances = {}
+  for (const f of bulkFrames) {
+    for (const d of f.detections ?? []) {
+      const cls = String(d.label ?? d.class ?? 'unknown').toLowerCase()
+      globalCounts[cls] = (globalCounts[cls] ?? 0) + 1
+      if (!globalDistances[cls]) globalDistances[cls] = []
+      if (typeof d.distance_m === 'number') globalDistances[cls].push(d.distance_m)
     }
   }
 
-  if (!contradictions.length) return answer
-
-  return `Data consistency correction: The current scene contains ${contradictions.join(', ')}, so the earlier zero-count statement is incorrect.\n\n${answer}`
-}
-
-function buildSystemPrompt(result) {
-  if (!result) {
-    return 'You are a LiDAR + Camera Fusion perception assistant. No scene has been loaded yet. Ask the user to upload a scene first.'
-  }
-  const detections = result.detections || []
-  const classCounts = getClassCounts(detections)
-
-  const classCountLines = Object.entries(classCounts)
+  const globalLines = Object.entries(globalCounts)
     .sort((a, b) => b[1] - a[1])
-    .map(([cls, count]) => `- ${cls}: ${count}`)
+    .map(([cls, total]) => {
+      const dists = globalDistances[cls] ?? []
+      if (!dists.length) return `  ${cls}: ${total} total`
+      const avg  = (dists.reduce((s, v) => s + v, 0) / dists.length).toFixed(1)
+      const min  = Math.min(...dists).toFixed(1)
+      const max  = Math.max(...dists).toFixed(1)
+      return `  ${cls}: ${total} total | avg ${avg}m | range ${min}–${max}m`
+    })
+    .join('\n') || '  (none)'
+
+  // Per-frame compact summary (capped at 200 frames to avoid token overflow)
+  const frameLines = bulkFrames
+    .slice(0, 200)
+    .map(frameDetectionLine)
     .join('\n')
 
-  const summary = detections
-    .map(
-      (d) => {
-        const cls = d.label ?? d.class ?? 'unknown'
-        const conf = d.score ?? d.confidence ?? null
-        const pos = d.center ?? d.xyz ?? []
-        const confText = conf == null ? '?' : Math.round(conf * 100)
-        const posText = Array.isArray(pos)
-          ? pos.map((v) => (typeof v === 'number' ? v.toFixed(1) : String(v))).join(', ')
-          : ''
-        const distText = typeof d.distance_m === 'number' ? d.distance_m.toFixed(1) : '?'
-        return `- ${cls}: ${distText}m away, confidence ${confText}%, position [${posText}]`
-      }
-    )
-    .join('\n')
+  // Current frame full detail
+  const curDets    = currentFrame?.detections ?? []
+  const curCounts  = getClassCounts(curDets)
+  const curStats   = currentFrame?.pipeline_stats ?? {}
+  const curCountLines = Object.entries(curCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cls, n]) => `  ${cls}: ${n}`)
+    .join('\n') || '  (none)'
+  const curDetLines = curDets.map(fmtDet).join('\n') || '  (none)'
 
-  return `You are a LiDAR + Camera Fusion perception assistant analyzing a KITTI autonomous driving scene.
+  return `You are a LiDAR+Camera Fusion perception assistant analyzing a KITTI temporal driving sequence.
 
-OPERATING RULES (STRICT):
-1. Use only provided scene data and tool outputs. Do not invent objects or counts.
-2. If uncertain about presence, counts, or filters, call query_scene before answering.
-3. Never say "no cars" (or similar) unless the data or tool results explicitly confirm zero.
-4. If detections are empty, state that clearly and suggest rerunning inference/upload.
-5. Keep responses concise, numeric, and evidence-based.
-6. When giving counts, include the source (loaded detections vs query result).
+${RULES}
 
-RESPONSE STYLE (MANDATORY):
-1. Write in a professional technical tone.
-2. Prefer short structured answers: finding -> evidence -> conclusion.
-3. Include concrete numbers whenever available.
-4. Avoid vague wording such as "probably" unless explicitly uncertain.
+═══ TEMPORAL DATASET OVERVIEW ═══
+Total frames processed: ${totalFrames}
+Total detections across all frames: ${Object.values(globalCounts).reduce((s, n) => s + n, 0)}
 
-SCHEMA NOTES:
-- Preferred detection keys: label, score, distance_m, center, bbox_2d.
-- Legacy fallback keys may appear: class, confidence, xyz.
-- Distances are in meters.
+GLOBAL CLASS STATS (all ${totalFrames} frames):
+${globalLines}
 
-TOOL USAGE POLICY:
-- Tool name: query_scene.
-- Use it for semantic lookups, filtered questions, and verification.
-- For count questions (for example "how many cars"), call query_scene first if there is any ambiguity.
+PER-FRAME SUMMARY:
+${frameLines}
 
-CLASS NORMALIZATION GUIDE:
-- car, cars, vehicle, vehicles, auto -> car
-- pedestrian, person, people, human -> pedestrian
-- cyclist, bicycle, bike, bikes -> cyclist
-- truck, trucks -> truck
-- van, vans -> van
+═══ CURRENT FRAME (index ${bulkSelectedIdx ?? 0} / frame_id: ${currentFrame?.frame_id ?? '?'}) ═══
+LiDAR points: ${currentFrame?.num_points?.toLocaleString() ?? '?'}
+Inference time: ${currentFrame?.inference_time_ms ?? '?'} ms
+Pipeline: YOLO ${curStats.yolo_n ?? '?'} | T1 ${curStats.tier1_fused_n ?? '?'} | T2 ${curStats.pp_gated_n ?? '?'} | T3 ${curStats.obb_n ?? '?'} | final ${curStats.final_n ?? '?'}
 
-Scene stats: ${result.num_points?.toLocaleString() ?? '?'} LiDAR points processed in ${result.inference_time_ms ?? '?'}ms.
+Class counts (${curDets.length} detections):
+${curCountLines}
 
-Detected objects (${detections.length} total):
-${summary || '(none)'}
+All detections:
+${curDetLines}
 
-Class counts from loaded detections:
-${classCountLines || '(none)'}
-
-Use the query_scene tool to search for specific objects or answer semantic questions about the scene. Be concise and reference actual numbers from the data. When mentioning distances, be precise.`
+Use query_scene to answer questions about the current frame. For temporal/cross-frame questions, use the dataset overview above.`
 }
+
+function buildSystemPrompt(result, bulkFrames, bulkIsTimeSeries, bulkSelectedIdx) {
+  if (bulkIsTimeSeries && bulkFrames.length > 1) {
+    return buildTemporalPrompt(result, bulkFrames, bulkSelectedIdx)
+  }
+  return buildSingleFramePrompt(result)
+}
+
+// ── Tool definition ────────────────────────────────────────────────────────────
 
 const QUERY_TOOL = {
   type: 'function',
   function: {
     name: 'query_scene',
     description:
-      'Semantically search the current scene\'s detected objects. Use this to answer questions about what objects are present, where they are, and their properties.',
+      'Semantically search the current scene\'s detected objects. Use for presence, count, distance, and filtered questions.',
     parameters: {
       type: 'object',
       properties: {
         text: {
           type: 'string',
-          description: 'Natural language search query, e.g. "cars within 15 meters"',
+          description: 'Natural language query, e.g. "cars within 15 meters"',
         },
         max_distance_m: {
           type: 'number',
-          description: 'Optional: filter results to objects within this many meters',
+          description: 'Optional: filter to objects within this many metres',
         },
       },
       required: ['text'],
@@ -134,9 +208,14 @@ const QUERY_TOOL = {
   },
 }
 
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
 export function useChatbot() {
   const {
     result,
+    bulkFrames,
+    bulkIsTimeSeries,
+    bulkSelectedIdx,
     conversationHistory,
     addChatMessage,
     updateLastChatMessage,
@@ -146,28 +225,18 @@ export function useChatbot() {
 
   const sendMessage = useCallback(
     async (userText) => {
-      const userMsgId = uuid()
-      const userMsg = { id: userMsgId, role: 'user', content: userText }
-      addChatMessage(userMsg)
+      addChatMessage({ id: uuid(), role: 'user', content: userText })
       setChatLoading(true)
 
-      const history = [
-        ...conversationHistory,
-        { role: 'user', content: userText },
-      ]
-
-      // Placeholder assistant message
-      const asstId = uuid()
+      const history = [...conversationHistory, { role: 'user', content: userText }]
+      const asstId  = uuid()
       addChatMessage({ id: asstId, role: 'assistant', content: '', loading: true })
 
+      const systemPrompt = buildSystemPrompt(result, bulkFrames, bulkIsTimeSeries, bulkSelectedIdx)
+      const sceneContext = { system: systemPrompt, tools: [QUERY_TOOL] }
+
       try {
-        let response = await sendChat({
-          messages: history,
-          sceneContext: {
-            system: buildSystemPrompt(result),
-            tools: [QUERY_TOOL],
-          },
-        })
+        let response = await sendChat({ messages: history, sceneContext })
 
         // Agentic tool-use loop
         while (response.tool_calls?.length > 0) {
@@ -180,42 +249,29 @@ export function useChatbot() {
 
           let toolResult
           try {
-            if (call.name === 'query_scene') {
-              toolResult = await queryScene(call.input)
-            } else {
-              toolResult = { error: `Unknown tool: ${call.name}` }
-            }
+            toolResult = call.name === 'query_scene'
+              ? await queryScene(call.input)
+              : { error: `Unknown tool: ${call.name}` }
           } catch (err) {
             toolResult = { error: err.message }
           }
 
           updateLastChatMessage({
-            toolCall: {
-              name: call.name,
-              input: call.input,
-              status: 'done',
-              result: toolResult,
-            },
+            toolCall: { name: call.name, input: call.input, status: 'done', result: toolResult },
           })
 
-          // Continue conversation with tool result
           history.push({ role: 'assistant', content: response.content ?? '', tool_calls: response.tool_calls })
-          history.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            content: JSON.stringify(toolResult),
-          })
+          history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(toolResult) })
 
-          response = await sendChat({
-            messages: history,
-            sceneContext: {
-              system: buildSystemPrompt(result),
-              tools: [QUERY_TOOL],
-            },
-          })
+          response = await sendChat({ messages: history, sceneContext })
         }
 
-        const finalText = enforceSceneConsistency(response.content ?? '', result)
+        // Consistency check against the current frame's detections
+        const currentDets = (bulkIsTimeSeries && bulkFrames.length > 1)
+          ? (bulkFrames[bulkSelectedIdx ?? 0]?.detections ?? result?.detections ?? [])
+          : (result?.detections ?? [])
+
+        const finalText = enforceSceneConsistency(response.content ?? '', currentDets)
         updateLastChatMessage({ content: finalText, loading: false, toolCall: undefined })
         history.push({ role: 'assistant', content: finalText })
         setConversationHistory(history)
@@ -225,7 +281,9 @@ export function useChatbot() {
         setChatLoading(false)
       }
     },
-    [result, conversationHistory, addChatMessage, updateLastChatMessage, setConversationHistory, setChatLoading]
+    [result, bulkFrames, bulkIsTimeSeries, bulkSelectedIdx,
+     conversationHistory, addChatMessage, updateLastChatMessage,
+     setConversationHistory, setChatLoading],
   )
 
   return { sendMessage }

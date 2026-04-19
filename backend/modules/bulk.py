@@ -263,16 +263,16 @@ def process_zip(zip_bytes: bytes, is_timeseries: bool = True) -> dict:
                 errors.append(f"{stem}: {exc}")
 
     video_boxes_mp4 = _build_video_from_base64_frames(frames, "camera_image") if is_timeseries else None
-    video_lidar_mp4 = _build_video_from_base64_frames(frames, "lidar_image") if is_timeseries else None
+    video_lidar_mp4 = _build_video_from_base64_frames(frames, "lidar_image")  if is_timeseries else None
+    video_bev_mp4   = _build_video_from_base64_frames(frames, "lidar_bev")    if is_timeseries else None
 
     return {
-        "frames":         frames,
-        "total_found":    total_found,
-        "processed":      len(frames),
-        "skipped_errors": errors,
-        "is_timeseries":  bool(is_timeseries),
-        "video_boxes_mp4": video_boxes_mp4,
-        "video_lidar_mp4": video_lidar_mp4,
+        "frames":              frames,
+        "total_found":         total_found,
+        "processed":           len(frames),
+        "skipped_errors":      errors,
+        "is_timeseries":       bool(is_timeseries),
         "video_annotated_mp4": video_boxes_mp4,
-        "video_bev_mp4":  video_lidar_mp4,
+        "video_lidar_mp4":     video_lidar_mp4,
+        "video_bev_mp4":       video_bev_mp4,
     }

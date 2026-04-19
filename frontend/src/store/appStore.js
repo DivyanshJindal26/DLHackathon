@@ -64,6 +64,7 @@ const useAppStore = create((set, get) => ({
   bulkSelectedIdx: null,
   bulkIsTimeSeries: true,
   bulkAnnotatedVideo: null,
+  bulkLidarVideo: null,
   bulkBevVideo: null,
 
   setBulkMode: (on) => set({ bulkMode: on }),
@@ -71,8 +72,8 @@ const useAppStore = create((set, get) => ({
   setBulkFrames: (frames) => set({ bulkFrames: frames, bulkStatus: 'done' }),
   setBulkSelectedIdx: (idx) => set({ bulkSelectedIdx: idx }),
   setBulkIsTimeSeries: (isTimeSeries) => set({ bulkIsTimeSeries: !!isTimeSeries }),
-  setBulkVideos: (annotatedVideo, bevVideo) =>
-    set({ bulkAnnotatedVideo: annotatedVideo, bulkBevVideo: bevVideo }),
+  setBulkVideos: (annotatedVideo, lidarVideo, bevVideo) =>
+    set({ bulkAnnotatedVideo: annotatedVideo, bulkLidarVideo: lidarVideo, bulkBevVideo: bevVideo }),
 
   // ── Chat ───────────────────────────────────────────────────────────────────
   chatOpen: false,
